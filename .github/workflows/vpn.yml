@@ -20,6 +20,8 @@ jobs:
           New-Item -ItemType Directory -Path "C:\Xray" -Force | Out-Null
           Set-Location "C:\Xray"
 
+          Write-Host "Downloading Xray..."
+
           Invoke-WebRequest `
             -Uri "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-windows-64.zip" `
             -OutFile "xray.zip"
@@ -31,11 +33,13 @@ jobs:
 
           Remove-Item "xray.zip" -Force
 
+          Write-Host "Downloading Cloudflared..."
+
           Invoke-WebRequest `
             -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
             -OutFile "cloudflared.exe"
 
-          Write-Host "Xray and Cloudflared installed."
+          Write-Host "Installation completed."
 
 
       # ==========================================================
@@ -54,7 +58,7 @@ jobs:
           $trojanPassword = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
 
           # ------------------------------------------------------
-          # VMess
+          # VMess inbound - 2053
           # ------------------------------------------------------
 
           $vmessInbound = @{
@@ -81,7 +85,7 @@ jobs:
           }
 
           # ------------------------------------------------------
-          # Trojan
+          # Trojan inbound - 2083
           # ------------------------------------------------------
 
           $trojanInbound = @{
@@ -344,11 +348,7 @@ jobs:
             throw "Cloudflare URL not found for port $Port."
           }
 
-
-          # VMess
           $vmessUrl = Get-QuickTunnelUrl -Port "2053"
-
-          # Trojan
           $trojanUrl = Get-QuickTunnelUrl -Port "2083"
 
           Write-Host ""
@@ -361,13 +361,13 @@ jobs:
 
           "VMESS_TUNNEL_URL=$vmessUrl" |
             Out-File `
-              $env:GITHUB_ENV `
+              -FilePath $env:GITHUB_ENV `
               -Encoding utf8 `
               -Append
 
           "TROJAN_TUNNEL_URL=$trojanUrl" |
             Out-File `
-              $env:GITHUB_ENV `
+              -FilePath $env:GITHUB_ENV `
               -Encoding utf8 `
               -Append
 
@@ -384,11 +384,9 @@ jobs:
         run: |
 
           $accountId = "e96a2dd0c1de68077e282bab0f5e64af"
-
           $workerName = "my-vpn-worker"
 
           $token = $env:CF_TOKEN_VMESS
-
           $targetUrl = $env:VMESS_TUNNEL_URL
 
           if ([string]::IsNullOrWhiteSpace($token)) {
@@ -400,27 +398,22 @@ jobs:
           }
 
           $workerCode = @"
-          addEventListener('fetch', event => {
-            event.respondWith(handleRequest(event.request));
-          });
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
+});
 
-          async function handleRequest(request) {
-            const url = new URL(request.url);
+async function handleRequest(request) {
+  const url = new URL(request.url);
+  const targetUrl = '$targetUrl';
+  const newUrl = targetUrl + url.pathname + url.search;
 
-            const targetUrl = '$targetUrl';
-
-            const newUrl =
-              targetUrl +
-              url.pathname +
-              url.search;
-
-            return fetch(new Request(newUrl, {
-              method: request.method,
-              headers: request.headers,
-              body: request.body
-            }));
-          }
-          "@
+  return fetch(new Request(newUrl, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body
+  }));
+}
+"@
 
           $headers = @{
             Authorization = "Bearer $token"
@@ -450,11 +443,9 @@ jobs:
         run: |
 
           $accountId = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
-
           $workerName = "little-frost-5a54"
 
           $token = $env:CF_TOKEN_TROJAN
-
           $targetUrl = $env:TROJAN_TUNNEL_URL
 
           if ([string]::IsNullOrWhiteSpace($token)) {
@@ -466,27 +457,22 @@ jobs:
           }
 
           $workerCode = @"
-          addEventListener('fetch', event => {
-            event.respondWith(handleRequest(event.request));
-          });
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
+});
 
-          async function handleRequest(request) {
-            const url = new URL(request.url);
+async function handleRequest(request) {
+  const url = new URL(request.url);
+  const targetUrl = '$targetUrl';
+  const newUrl = targetUrl + url.pathname + url.search;
 
-            const targetUrl = '$targetUrl';
-
-            const newUrl =
-              targetUrl +
-              url.pathname +
-              url.search;
-
-            return fetch(new Request(newUrl, {
-              method: request.method,
-              headers: request.headers,
-              body: request.body
-            }));
-          }
-          "@
+  return fetch(new Request(newUrl, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body
+  }));
+}
+"@
 
           $headers = @{
             Authorization = "Bearer $token"
@@ -515,13 +501,9 @@ jobs:
 
         run: |
 
-          # VMess credential
           $vmessUuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
-
           $serverId = "server1"
-
           $secret = $env:UPDATE_SECRET
-
           $domain = "my-vpn-worker.hosseinderees7.workers.dev"
 
           if ([string]::IsNullOrWhiteSpace($secret)) {
@@ -546,9 +528,7 @@ jobs:
             fp = ""
           }
 
-          $json = $vmessObject |
-            ConvertTo-Json `
-              -Compress
+          $json = $vmessObject | ConvertTo-Json -Compress
 
           $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 
@@ -556,23 +536,35 @@ jobs:
 
           $link = "vmess://$base64"
 
+          Write-Host "VMess link generated."
+
           $body = @{
             server_id = $serverId
             vmess = $link
-          } |
-            ConvertTo-Json
+          } | ConvertTo-Json -Compress
 
-          Invoke-RestMethod `
-            -Uri "https://miradig.ir/update" `
-            -Method Post `
-            -Headers @{
-              Authorization = "Bearer $secret"
-            } `
-            -Body $body `
-            -ContentType "application/json" `
-            -TimeoutSec 15
+          try {
 
-          Write-Host "VMess link sent successfully."
+            Invoke-RestMethod `
+              -Uri "https://miradig.ir/update" `
+              -Method Post `
+              -Headers @{
+                Authorization = "Bearer $secret"
+              } `
+              -Body $body `
+              -ContentType "application/json" `
+              -TimeoutSec 15
+
+            Write-Host "VMess link sent successfully."
+
+          }
+          catch {
+
+            Write-Host "Failed to send VMess link."
+            Write-Host $_
+
+            throw
+          }
 
 
       # ==========================================================
@@ -586,42 +578,46 @@ jobs:
 
         run: |
 
-          # Trojan credential
           $trojanPassword = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
-
           $serverId = "server1"
-
           $secret = $env:UPDATE_SECRET
-
           $domain = "little-frost-5a54.nest-dev-full-stack.workers.dev"
 
           if ([string]::IsNullOrWhiteSpace($secret)) {
             throw "UPDATE_SECRET is missing."
           }
 
-          $escapedPassword = [System.Uri]::EscapeDataString(
-            $trojanPassword
-          )
+          $link = "trojan://$trojanPassword@$domain`:443?path=%2F&security=tls&type=ws#WRK_Trojan"
 
-          $link = "trojan://${escapedPassword}@${domain}:443?path=%2F&security=tls&type=ws#WRK_Trojan"
+          Write-Host "Trojan link generated."
 
           $body = @{
             server_id = $serverId
             trojan = $link
-          } |
-            ConvertTo-Json
+          } | ConvertTo-Json -Compress
 
-          Invoke-RestMethod `
-            -Uri "https://miradig.ir/update" `
-            -Method Post `
-            -Headers @{
-              Authorization = "Bearer $secret"
-            } `
-            -Body $body `
-            -ContentType "application/json" `
-            -TimeoutSec 15
+          try {
 
-          Write-Host "Trojan link sent successfully."
+            Invoke-RestMethod `
+              -Uri "https://miradig.ir/update" `
+              -Method Post `
+              -Headers @{
+                Authorization = "Bearer $secret"
+              } `
+              -Body $body `
+              -ContentType "application/json" `
+              -TimeoutSec 15
+
+            Write-Host "Trojan link sent successfully."
+
+          }
+          catch {
+
+            Write-Host "Failed to send Trojan link."
+            Write-Host $_
+
+            throw
+          }
 
 
       # ==========================================================
@@ -638,9 +634,8 @@ jobs:
 
             Start-Sleep -Seconds 60
 
-
             # ----------------------------------------------------
-            # XRAY
+            # CHECK XRAY
             # ----------------------------------------------------
 
             $xray = Get-Process `
@@ -659,9 +654,8 @@ jobs:
               Start-Sleep -Seconds 3
             }
 
-
             # ----------------------------------------------------
-            # CLOUDFLARED
+            # CHECK CLOUDFLARED
             # ----------------------------------------------------
 
             $cfProcesses = @(
@@ -675,6 +669,7 @@ jobs:
             if ($cfCount -lt $ports.Count) {
 
               Write-Host "Cloudflared count: $cfCount/$($ports.Count)"
+              Write-Host "Starting tunnels..."
 
               foreach ($port in $ports) {
 
@@ -687,5 +682,12 @@ jobs:
               }
             }
 
-            Write-Host "[$i/360] Xray: $(if ($xray) { 'OK' } else { 'Restarted' }) | Cloudflared: $cfCount/$($ports.Count)"
+            $xrayStatus = if ($xray) {
+              "OK"
+            }
+            else {
+              "Restarted"
+            }
+
+            Write-Host "[$i/360] Xray: $xrayStatus | Cloudflared: $cfCount/$($ports.Count)"
           }
