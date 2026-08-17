@@ -1,3 +1,52 @@
+name: VPN Workers - VMess + Trojan
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+
+      # ==========================================================
+      # 1. INSTALL XRAY + CLOUDFLARED
+      # ==========================================================
+
+      - name: Install Xray and Cloudflared
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path "C:\Xray" -Force | Out-Null
+
+          Set-Location "C:\Xray"
+
+          Write-Host "Downloading Xray..."
+
+          Invoke-WebRequest `
+            "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-windows-64.zip" `
+            -OutFile "xray.zip"
+
+          Expand-Archive `
+            -Path "xray.zip" `
+            -DestinationPath "." `
+            -Force
+
+          Remove-Item "xray.zip" -Force
+
+          Write-Host "Downloading Cloudflared..."
+
+          Invoke-WebRequest `
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
+            -OutFile "cloudflared.exe"
+
+          Write-Host "Installation completed."
+
+
+      # ==========================================================
+      # 2. CREATE XRAY CONFIG
+      # ==========================================================
+
       - name: Create Xray Config
         shell: powershell
         run: |
@@ -5,11 +54,10 @@
 
           $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
 
-          # ======================================================
-          # VMess - 2053
-          # ======================================================
+          $inbounds = @()
 
-          $vmessInbound = @{
+          # VMess - Port 2053
+          $inbounds += @{
             listen = "0.0.0.0"
             port = 2053
             protocol = "vmess"
@@ -32,12 +80,13 @@
             }
           }
 
+          # Trojan-compatible inbound - Port 2083
+          #
+          # NOTE:
+          # This is kept as a separate Xray inbound on port 2083.
+          # The actual protocol must match the client/worker setup.
 
-          # ======================================================
-          # Trojan - 2083
-          # ======================================================
-
-          $trojanInbound = @{
+          $inbounds += @{
             listen = "0.0.0.0"
             port = 2083
             protocol = "trojan"
@@ -59,16 +108,8 @@
             }
           }
 
-
-          # ======================================================
-          # Xray Config
-          # ======================================================
-
           $config = @{
-            inbounds = @(
-              $vmessInbound
-              $trojanInbound
-            )
+            inbounds = $inbounds
 
             outbounds = @(
               @{
@@ -85,11 +126,6 @@
             }
           }
 
-
-          # ======================================================
-          # WRITE CONFIG
-          # ======================================================
-
           $json = $config | ConvertTo-Json -Depth 20
 
           [System.IO.File]::WriteAllText(
@@ -98,9 +134,651 @@
             [System.Text.UTF8Encoding]::new($false)
           )
 
+          Write-Host "Xray config created."
+
+          Write-Host ""
+          Write-Host "========== CONFIG =========="
+          Write-Host $json
+          Write-Host "============================"
+
+
+      # ==========================================================
+      # 3. OPEN FIREWALL
+      # ==========================================================
+
+      - name: Open Firewall
+        shell: powershell
+        run: |
+          $ports = @(2053, 2083)
+
+          foreach ($port in $ports) {
+
+            netsh advfirewall firewall delete rule `
+              name="Xray-$port" `
+              | Out-Null
+
+            netsh advfirewall firewall add rule `
+              name="Xray-$port" `
+              dir=in `
+              action=allow `
+              protocol=TCP `
+              localport=$port
+
+            Write-Host "Firewall opened for port $port"
+          }
+
+
+      # ==========================================================
+      # 4. START XRAY
+      # ==========================================================
+
+      - name: Start Xray
+        shell: powershell
+        run: |
+          Set-Location "C:\Xray"
+
+          $existing = Get-Process `
+            -Name "xray" `
+            -ErrorAction SilentlyContinue
+
+          if ($existing) {
+            Write-Host "Stopping existing Xray..."
+            Stop-Process `
+              -Name "xray" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          Start-Process `
+            -FilePath "C:\Xray\xray.exe" `
+            -ArgumentList "-config C:\Xray\config.json" `
+            -WindowStyle Hidden
+
+          Start-Sleep -Seconds 5
+
+          $xray = Get-Process `
+            -Name "xray" `
+            -ErrorAction SilentlyContinue
+
+          if ($xray) {
+            Write-Host "Xray started successfully."
+          }
+          else {
+            throw "Xray failed to start."
+          }
+
+
+      # ==========================================================
+      # 5. START CLOUDFLARED
+      # ==========================================================
+
+      - name: Start Cloudflared
+        shell: powershell
+        run: |
+          Set-Location "C:\Xray"
+
+          $ports = @(2053, 2083)
+
+          # Remove old log files
+          foreach ($port in $ports) {
+
+            Remove-Item `
+              "C:\Xray\cf_out_$port.txt" `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+            Remove-Item `
+              "C:\Xray\cf_err_$port.txt" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          # Stop old cloudflared processes
+          Get-Process `
+            -Name "cloudflared" `
+            -ErrorAction SilentlyContinue |
+            Stop-Process `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+          Start-Sleep -Seconds 2
+
+          foreach ($port in $ports) {
+
+            Write-Host "Starting Cloudflared for port $port..."
+
+            $command = `
+              "C:\Xray\cloudflared.exe tunnel --url http://localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt"
+
+            Start-Process `
+              "cmd.exe" `
+              -ArgumentList "/c", $command `
+              -WindowStyle Hidden
+
+            Start-Sleep -Seconds 2
+          }
+
+          # Same waiting logic as the working workflow
+          Start-Sleep -Seconds 20
+
+          Write-Host ""
+          Write-Host "Cloudflared processes:"
+          Get-Process `
+            -Name "cloudflared" `
+            -ErrorAction SilentlyContinue
+
+
+      # ==========================================================
+      # 6. GET CLOUDFLARE URLS
+      # ==========================================================
+
+      - name: Get Cloudflare URLs
+        shell: powershell
+        run: |
+
+          # ------------------------------------------------------
+          # VMESS
+          # ------------------------------------------------------
+
           Write-Host ""
           Write-Host "=========================================="
-          Write-Host "Xray config created successfully"
+          Write-Host "Getting VMess Cloudflare URL"
           Write-Host "=========================================="
 
-          Write-Host $json
+          $logVmess = Get-Content `
+            "C:\Xray\cf_out_2053.txt", `
+            "C:\Xray\cf_err_2053.txt" `
+            -Raw `
+            -ErrorAction SilentlyContinue
+
+          Write-Host ""
+          Write-Host "========== VMess LOG =========="
+          Write-Host $logVmess
+          Write-Host "==============================="
+
+          $urlVmess = $logVmess |
+            Select-String `
+              -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' |
+            ForEach-Object {
+              $_.Matches.Value
+            } |
+            Select-Object -First 1
+
+          if (-not $urlVmess) {
+            throw "VMess Cloudflare URL not found."
+          }
+
+          Write-Host ""
+          Write-Host "VMess Cloudflare URL:"
+          Write-Host $urlVmess
+
+          # Save for next step
+          "VMESS_URL=$urlVmess" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8 `
+            -Append
+
+
+          # ------------------------------------------------------
+          # TROJAN
+          # ------------------------------------------------------
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "Getting Trojan Cloudflare URL"
+          Write-Host "=========================================="
+
+          $logTrojan = Get-Content `
+            "C:\Xray\cf_out_2083.txt", `
+            "C:\Xray\cf_err_2083.txt" `
+            -Raw `
+            -ErrorAction SilentlyContinue
+
+          Write-Host ""
+          Write-Host "========== Trojan LOG =========="
+          Write-Host $logTrojan
+          Write-Host "==============================="
+
+          $urlTrojan = $logTrojan |
+            Select-String `
+              -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' |
+            ForEach-Object {
+              $_.Matches.Value
+            } |
+            Select-Object -First 1
+
+          if (-not $urlTrojan) {
+            throw "Trojan Cloudflare URL not found."
+          }
+
+          Write-Host ""
+          Write-Host "Trojan Cloudflare URL:"
+          Write-Host $urlTrojan
+
+          # Save for next step
+          "TROJAN_URL=$urlTrojan" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8 `
+            -Append
+
+
+      # ==========================================================
+      # 7. UPDATE CLOUDFLARE WORKERS
+      # ==========================================================
+
+      - name: Update Workers
+        shell: powershell
+        env:
+          VMESS_TOKEN: ${{ secrets.CF_TOKEN_VMESS }}
+          TROJAN_TOKEN: ${{ secrets.CF_TOKEN_TROJAN }}
+
+        run: |
+
+          # ======================================================
+          # VMESS WORKER
+          # ======================================================
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "Updating VMess Worker"
+          Write-Host "=========================================="
+
+          $vmessToken = $env:VMESS_TOKEN
+
+          if ([string]::IsNullOrWhiteSpace($vmessToken)) {
+            throw "CF_TOKEN_VMESS is missing."
+          }
+
+          $vmessAccountId = "e96a2dd0c1de68077e282bab0f5e64af"
+
+          $vmessTarget = $env:VMESS_URL
+
+          if ([string]::IsNullOrWhiteSpace($vmessTarget)) {
+            throw "VMESS_URL is empty."
+          }
+
+          $vmessCode = @"
+          addEventListener('fetch', event => {
+            event.respondWith(handleRequest(event.request));
+          });
+
+          async function handleRequest(request) {
+            const url = new URL(request.url);
+
+            const targetUrl = '$vmessTarget';
+
+            const newUrl =
+              targetUrl +
+              url.pathname +
+              url.search;
+
+            return fetch(
+              new Request(newUrl, {
+                method: request.method,
+                headers: request.headers,
+                body: request.body
+              })
+            );
+          }
+          "@
+
+          Set-Content `
+            -Path "C:\Xray\worker-vmess.js" `
+            -Value $vmessCode `
+            -Encoding UTF8
+
+          $headersVmess = @{
+            Authorization = "Bearer $vmessToken"
+            "Content-Type" = "application/javascript"
+          }
+
+          $bodyVmess = Get-Content `
+            "C:\Xray\worker-vmess.js" `
+            -Raw
+
+          $vmessApi = `
+            "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker"
+
+          try {
+
+            Invoke-RestMethod `
+              -Uri $vmessApi `
+              -Method Put `
+              -Headers $headersVmess `
+              -Body $bodyVmess
+
+            Write-Host "VMess Worker updated successfully."
+
+          }
+          catch {
+
+            Write-Host "VMess Worker update failed:"
+            Write-Host $_
+
+            throw
+          }
+
+
+          # ======================================================
+          # TROJAN WORKER
+          # ======================================================
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "Updating Trojan Worker"
+          Write-Host "=========================================="
+
+          $trojanToken = $env:TROJAN_TOKEN
+
+          if ([string]::IsNullOrWhiteSpace($trojanToken)) {
+            throw "CF_TOKEN_TROJAN is missing."
+          }
+
+          $trojanAccountId = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
+
+          $trojanTarget = $env:TROJAN_URL
+
+          if ([string]::IsNullOrWhiteSpace($trojanTarget)) {
+            throw "TROJAN_URL is empty."
+          }
+
+          $trojanCode = @"
+          addEventListener('fetch', event => {
+            event.respondWith(handleRequest(event.request));
+          });
+
+          async function handleRequest(request) {
+            const url = new URL(request.url);
+
+            const targetUrl = '$trojanTarget';
+
+            const newUrl =
+              targetUrl +
+              url.pathname +
+              url.search;
+
+            return fetch(
+              new Request(newUrl, {
+                method: request.method,
+                headers: request.headers,
+                body: request.body
+              })
+            );
+          }
+          "@
+
+          Set-Content `
+            -Path "C:\Xray\worker-trojan.js" `
+            -Value $trojanCode `
+            -Encoding UTF8
+
+          $headersTrojan = @{
+            Authorization = "Bearer $trojanToken"
+            "Content-Type" = "application/javascript"
+          }
+
+          $bodyTrojan = Get-Content `
+            "C:\Xray\worker-trojan.js" `
+            -Raw
+
+          $trojanApi = `
+            "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54"
+
+          try {
+
+            Invoke-RestMethod `
+              -Uri $trojanApi `
+              -Method Put `
+              -Headers $headersTrojan `
+              -Body $bodyTrojan
+
+            Write-Host "Trojan Worker updated successfully."
+
+          }
+          catch {
+
+            Write-Host "Trojan Worker update failed:"
+            Write-Host $_
+
+            throw
+          }
+
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "BOTH WORKERS UPDATED"
+          Write-Host "=========================================="
+
+          Write-Host "VMess target : $vmessTarget"
+          Write-Host "Trojan target: $trojanTarget"
+
+
+      # ==========================================================
+      # 8. GENERATE AND SEND VMESS LINK
+      # ==========================================================
+
+      - name: Generate VMess Link
+        shell: powershell
+        env:
+          UPDATE_SECRET: ${{ secrets.UPDATE_SECRET }}
+
+        run: |
+
+          $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
+
+          $serverId = "server1"
+
+          $secret = $env:UPDATE_SECRET
+
+          if ([string]::IsNullOrWhiteSpace($secret)) {
+            throw "UPDATE_SECRET is missing."
+          }
+
+          $domainVmess = "my-vpn-worker.hosseinderees7.workers.dev"
+
+          $vmessObj = [ordered]@{
+            v = "2"
+            ps = "WRK_VMess"
+            add = $domainVmess
+            port = 443
+            id = $uuid
+            aid = 0
+            scy = "zero"
+            net = "ws"
+            type = "none"
+            host = ""
+            path = "/"
+            tls = "tls"
+            sni = ""
+            alpn = ""
+            fp = ""
+          }
+
+          $jsonVmess = $vmessObj |
+            ConvertTo-Json `
+              -Compress
+
+          $bytesVmess = [
+            System.Text.Encoding
+          ]::UTF8.GetBytes($jsonVmess)
+
+          $base64Vmess = [
+            System.Convert
+          ]::ToBase64String($bytesVmess)
+
+          $vmessLink = "vmess://$base64Vmess"
+
+          Write-Host ""
+          Write-Host "VMess link generated."
+
+          $body = @{
+            server_id = $serverId
+            vmess = $vmessLink
+          } |
+            ConvertTo-Json
+
+          try {
+
+            Invoke-RestMethod `
+              -Uri "https://miradig.ir/update" `
+              -Method Post `
+              -Headers @{
+                Authorization = "Bearer $secret"
+              } `
+              -Body $body `
+              -ContentType "application/json" `
+              -TimeoutSec 15
+
+            Write-Host "VMess link sent successfully."
+
+          }
+          catch {
+
+            Write-Host "Failed to send VMess link:"
+            Write-Host $_
+
+            throw
+          }
+
+
+      # ==========================================================
+      # 9. GENERATE AND SEND TROJAN LINK
+      # ==========================================================
+
+      - name: Generate Trojan Link
+        shell: powershell
+        env:
+          UPDATE_SECRET: ${{ secrets.UPDATE_SECRET }}
+
+        run: |
+
+          $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
+
+          $serverId = "server1"
+
+          $secret = $env:UPDATE_SECRET
+
+          if ([string]::IsNullOrWhiteSpace($secret)) {
+            throw "UPDATE_SECRET is missing."
+          }
+
+          $domainTrojan = `
+            "little-frost-5a54.nest-dev-full-stack.workers.dev"
+
+          $trojanLink = `
+            "trojan://${uuid}@${domainTrojan}:443?path=%2F&security=tls&type=ws#WRK_Trojan"
+
+          Write-Host ""
+          Write-Host "Trojan link generated."
+
+          $body = @{
+            server_id = $serverId
+            trojan = $trojanLink
+          } |
+            ConvertTo-Json
+
+          try {
+
+            Invoke-RestMethod `
+              -Uri "https://miradig.ir/update" `
+              -Method Post `
+              -Headers @{
+                Authorization = "Bearer $secret"
+              } `
+              -Body $body `
+              -ContentType "application/json" `
+              -TimeoutSec 15
+
+            Write-Host "Trojan link sent successfully."
+
+          }
+          catch {
+
+            Write-Host "Failed to send Trojan link:"
+            Write-Host $_
+
+            throw
+          }
+
+
+      # ==========================================================
+      # 10. KEEP ALIVE
+      # ==========================================================
+
+      - name: Keep Alive
+        shell: powershell
+        run: |
+
+          $ports = @(2053, 2083)
+
+          for ($i = 1; $i -le 360; $i++) {
+
+            Start-Sleep -Seconds 60
+
+            # ----------------------------------------------------
+            # CHECK XRAY
+            # ----------------------------------------------------
+
+            $xray = Get-Process `
+              -Name "xray" `
+              -ErrorAction SilentlyContinue
+
+            if (-not $xray) {
+
+              Write-Host "Xray stopped. Restarting..."
+
+              Start-Process `
+                -FilePath "C:\Xray\xray.exe" `
+                -ArgumentList "-config C:\Xray\config.json" `
+                -WindowStyle Hidden
+
+            }
+
+
+            # ----------------------------------------------------
+            # CHECK CLOUDFLARED
+            # ----------------------------------------------------
+
+            $cfCount = (
+              Get-Process `
+                -Name "cloudflared" `
+                -ErrorAction SilentlyContinue
+            ).Count
+
+            if ($cfCount -lt $ports.Count) {
+
+              Write-Host "Cloudflared process count is low."
+              Write-Host "Restarting missing tunnels..."
+
+              foreach ($port in $ports) {
+
+                $outFile = "C:\Xray\cf_out_$port.txt"
+                $errFile = "C:\Xray\cf_err_$port.txt"
+
+                $command = `
+                  "C:\Xray\cloudflared.exe tunnel --url http://localhost:$port > $outFile 2> $errFile"
+
+                Start-Process `
+                  "cmd.exe" `
+                  -ArgumentList "/c", $command `
+                  -WindowStyle Hidden
+              }
+            }
+
+
+            # ----------------------------------------------------
+            # STATUS
+            # ----------------------------------------------------
+
+            $xrayStatus = if ($xray) {
+              "OK"
+            }
+            else {
+              "Restarted"
+            }
+
+            Write-Host ""
+            Write-Host "[$i/360] Alive"
+            Write-Host "Xray: $xrayStatus"
+            Write-Host "Cloudflared: $cfCount/$($ports.Count)"
+          }
