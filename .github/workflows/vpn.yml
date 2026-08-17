@@ -21,7 +21,7 @@ jobs:
       - name: Create Xray Config
         run: |
           cd C:\Xray
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
           $inbounds = @()
           foreach ($port in $ports) {
             $inbounds += "{`"listen`":`"0.0.0.0`",`"port`":$port,`"protocol`":`"vmess`",`"settings`":{`"clients`":[{`"id`":`"5aa2ebe1-5114-4bc3-aefa-935807433e70`",`"alterId`":0}]},`"streamSettings`":{`"network`":`"ws`",`"wsSettings`":{`"path`":`"/`"}}}"
@@ -31,7 +31,7 @@ jobs:
 
       - name: Open Firewall
         run: |
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
           foreach ($port in $ports) {
             netsh advfirewall firewall add rule name="Xray-$port" dir=in action=allow protocol=TCP localport=$port
           }
@@ -45,7 +45,7 @@ jobs:
       - name: Start Cloudflared
         run: |
           cd C:\Xray
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
           foreach ($port in $ports) {
             Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden
             Start-Sleep -Seconds 2
@@ -56,7 +56,7 @@ jobs:
         run: |
           $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
           $secret = "fasjfajf09wjf9jawfj0j"
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
           $index = 1
           foreach ($port in $ports) {
             $log = Get-Content "C:\Xray\cf_out_$port.txt", "C:\Xray\cf_err_$port.txt" -Raw -ErrorAction SilentlyContinue
@@ -78,6 +78,6 @@ jobs:
             $xray = Get-Process -Name "xray" -ErrorAction SilentlyContinue
             $cf = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
             if (-not $xray) { Start-Process -FilePath "C:\Xray\xray.exe" -ArgumentList "-config C:\Xray\config.json" -WindowStyle Hidden }
-            if (-not $cf) { $ports = @(443, 2053, 2083, 2087, 2096, 8443); foreach ($port in $ports) { Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden } }
+            if (-not $cf) { $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082); foreach ($port in $ports) { Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden } }
             Write-Host "[$i/360] Alive"
           }
