@@ -21,7 +21,7 @@ jobs:
       - name: Create Xray Config
         run: |
           cd C:\Xray
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
+          $ports = @(443, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8443, 8880)
           $inbounds = @()
           foreach ($port in $ports) {
             $inbounds += "{`"listen`":`"0.0.0.0`",`"port`":$port,`"protocol`":`"vmess`",`"settings`":{`"clients`":[{`"id`":`"5aa2ebe1-5114-4bc3-aefa-935807433e70`",`"alterId`":0}]},`"streamSettings`":{`"network`":`"ws`",`"wsSettings`":{`"path`":`"/`"}}}"
@@ -31,7 +31,7 @@ jobs:
 
       - name: Open Firewall
         run: |
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
+          $ports = @(443, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8443, 8880)
           foreach ($port in $ports) {
             netsh advfirewall firewall add rule name="Xray-$port" dir=in action=allow protocol=TCP localport=$port
           }
@@ -45,39 +45,65 @@ jobs:
       - name: Start Cloudflared
         run: |
           cd C:\Xray
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
+          $ports = @(443, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8443, 8880)
           foreach ($port in $ports) {
             Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden
             Start-Sleep -Seconds 2
           }
           Start-Sleep -Seconds 20
 
-      - name: Generate Links
+      - name: Generate Links and Send to Host
         run: |
           $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
           $secret = "fasjfajf09wjf9jawfj0j"
-          $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082)
-          $index = 1
+          $ports = @(443, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8443, 8880)
+          
+          $serverId = "server1"
+          $ps = "Server1_hosseinDev"
+          
           foreach ($port in $ports) {
             $log = Get-Content "C:\Xray\cf_out_$port.txt", "C:\Xray\cf_err_$port.txt" -Raw -ErrorAction SilentlyContinue
             $url = $log | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+            
             if ($url) {
               $domain = $url -replace '^https://', ''
-              $json = "{`"add`":`"$domain`",`"aid`":0,`"id`":`"$uuid`",`"net`":`"ws`",`"path`":`"/`",`"port`":$port,`"type`":`"none`",`"tls`":`"tls`"}"
+              $json = "{`"add`":`"$domain`",`"aid`":0,`"id`":`"$uuid`",`"net`":`"ws`",`"path`":`"/`",`"port`":$port,`"type`":`"none`",`"tls`":`"tls`",`"ps`":`"$ps`"}"
               $link = "vmess://" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-              $body = @{ server_id = "server$index"; vmess = $link } | ConvertTo-Json
-              Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
-              $index++
+              
+              Write-Host "Sending: $ps (Port: $port)"
+              
+              $body = @{ 
+                server_id = $serverId
+                vmess = $link 
+              } | ConvertTo-Json
+              
+              try {
+                Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json" -TimeoutSec 15
+                Write-Host "✅ Sent"
+              } catch {
+                Write-Host "❌ Failed"
+              }
             }
           }
 
       - name: Keep Alive
         run: |
+          $ports = @(443, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8443, 8880)
+          
           for ($i = 1; $i -le 360; $i++) {
             Start-Sleep -Seconds 60
+            
             $xray = Get-Process -Name "xray" -ErrorAction SilentlyContinue
-            $cf = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
-            if (-not $xray) { Start-Process -FilePath "C:\Xray\xray.exe" -ArgumentList "-config C:\Xray\config.json" -WindowStyle Hidden }
-            if (-not $cf) { $ports = @(443, 2053, 2083, 2087, 2096, 8443, 8080, 8880, 2052, 2082); foreach ($port in $ports) { Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden } }
-            Write-Host "[$i/360] Alive"
+            if (-not $xray) {
+              Start-Process -FilePath "C:\Xray\xray.exe" -ArgumentList "-config C:\Xray\config.json" -WindowStyle Hidden
+            }
+            
+            $cfCount = (Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue).Count
+            if ($cfCount -lt $ports.Count) {
+              foreach ($port in $ports) {
+                Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden
+              }
+            }
+            
+            Write-Host "[$i/360] Alive - Xray: $(if($xray){'OK'}else{'Restarted'}) | CF: $cfCount/$($ports.Count)"
           }
