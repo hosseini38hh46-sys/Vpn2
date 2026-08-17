@@ -1,0 +1,83 @@
+name: VPN Multi-Port
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Xray and Cloudflared
+        run: |
+          mkdir C:\Xray -Force
+          cd C:\Xray
+          Invoke-WebRequest "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-windows-64.zip" -OutFile "xray.zip"
+          Expand-Archive -Path "xray.zip" -DestinationPath "." -Force
+          Remove-Item "xray.zip" -Force
+          Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
+
+      - name: Create Xray Config
+        run: |
+          cd C:\Xray
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          $inbounds = @()
+          foreach ($port in $ports) {
+            $inbounds += "{`"listen`":`"0.0.0.0`",`"port`":$port,`"protocol`":`"vmess`",`"settings`":{`"clients`":[{`"id`":`"5aa2ebe1-5114-4bc3-aefa-935807433e70`",`"alterId`":0}]},`"streamSettings`":{`"network`":`"ws`",`"wsSettings`":{`"path`":`"/`"}}}"
+          }
+          $config = "{`"inbounds`":[" + ($inbounds -join ",") + "],`"outbounds`":[{`"protocol`":`"freedom`"}],`"policy`":{`"levels`":{`"0`":{`"bufferSize`":10240}}}}"
+          [System.IO.File]::WriteAllText("C:\Xray\config.json", $config)
+
+      - name: Open Firewall
+        run: |
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          foreach ($port in $ports) {
+            netsh advfirewall firewall add rule name="Xray-$port" dir=in action=allow protocol=TCP localport=$port
+          }
+
+      - name: Start Xray
+        run: |
+          cd C:\Xray
+          Start-Process -FilePath "C:\Xray\xray.exe" -ArgumentList "-config config.json" -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+
+      - name: Start Cloudflared
+        run: |
+          cd C:\Xray
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          foreach ($port in $ports) {
+            Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden
+            Start-Sleep -Seconds 2
+          }
+          Start-Sleep -Seconds 20
+
+      - name: Generate Links
+        run: |
+          $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
+          $secret = "fasjfajf09wjf9jawfj0j"
+          $ports = @(443, 2053, 2083, 2087, 2096, 8443)
+          $index = 1
+          foreach ($port in $ports) {
+            $log = Get-Content "C:\Xray\cf_out_$port.txt", "C:\Xray\cf_err_$port.txt" -Raw -ErrorAction SilentlyContinue
+            $url = $log | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+            if ($url) {
+              $domain = $url -replace '^https://', ''
+              $json = "{`"add`":`"$domain`",`"aid`":0,`"id`":`"$uuid`",`"net`":`"ws`",`"path`":`"/`",`"port`":$port,`"type`":`"none`",`"tls`":`"tls`"}"
+              $link = "vmess://" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+              $body = @{ server_id = "server$index"; vmess = $link } | ConvertTo-Json
+              Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
+              $index++
+            }
+          }
+
+      - name: Keep Alive
+        run: |
+          for ($i = 1; $i -le 360; $i++) {
+            Start-Sleep -Seconds 60
+            $xray = Get-Process -Name "xray" -ErrorAction SilentlyContinue
+            $cf = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
+            if (-not $xray) { Start-Process -FilePath "C:\Xray\xray.exe" -ArgumentList "-config C:\Xray\config.json" -WindowStyle Hidden }
+            if (-not $cf) { $ports = @(443, 2053, 2083, 2087, 2096, 8443); foreach ($port in $ports) { Start-Process cmd -ArgumentList '/c', "C:\Xray\cloudflared.exe tunnel --url localhost:$port > C:\Xray\cf_out_$port.txt 2> C:\Xray\cf_err_$port.txt" -WindowStyle Hidden } }
+            Write-Host "[$i/360] Alive"
+          }
