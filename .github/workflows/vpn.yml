@@ -8,216 +8,326 @@ jobs:
     runs-on: windows-latest
 
     steps:
+
+      # ==========================================================
+      # UPDATE VMESS + TROJAN WORKERS
+      # ==========================================================
+
       - name: Update 2 Workers (VMess + Trojan)
         shell: pwsh
         env:
           VMESS_TOKEN: ${{ secrets.CF_TOKEN_VMESS }}
           TROJAN_TOKEN: ${{ secrets.CF_TOKEN_TROJAN }}
+          UPDATE_SECRET: ${{ secrets.UPDATE_SECRET }}
+
         run: |
-          # ==========================================
-          # ACCOUNT 1: VMess Worker
-          # ==========================================
+
+          $ErrorActionPreference = "Stop"
+
+          # ======================================================
+          # CONFIG
+          # ======================================================
+
+          $vmessAccountId = "e96a2dd0c1de68077e282bab0f5e64af"
+          $vmessWorkerName = "my-vpn-worker"
+
+          $trojanAccountId = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
+          $trojanWorkerName = "little-frost-5a54"
+
+          $vmessOut = "C:\Xray\cf_out_2053.txt"
+          $vmessErr = "C:\Xray\cf_err_2053.txt"
+
+          $trojanOut = "C:\Xray\cf_out_2083.txt"
+          $trojanErr = "C:\Xray\cf_err_2083.txt"
+
+
+          # ======================================================
+          # FUNCTION: READ LOG
+          # ======================================================
+
+          function Get-TunnelLog {
+              param (
+                  [string]$OutFile,
+                  [string]$ErrFile
+              )
+
+              $parts = @()
+
+              if (Test-Path $OutFile) {
+                  $parts += Get-Content $OutFile -Raw -ErrorAction SilentlyContinue
+              }
+
+              if (Test-Path $ErrFile) {
+                  $parts += Get-Content $ErrFile -Raw -ErrorAction SilentlyContinue
+              }
+
+              return ($parts -join "`n")
+          }
+
+
+          # ======================================================
+          # FUNCTION: FIND CLOUDFLARE URL
+          # ======================================================
+
+          function Wait-ForCloudflareUrl {
+              param (
+                  [string]$OutFile,
+                  [string]$ErrFile,
+                  [string]$Name,
+                  [int]$TimeoutSeconds = 60
+              )
+
+              Write-Host ""
+              Write-Host "=========================================="
+              Write-Host "Searching Cloudflare URL: $Name"
+              Write-Host "=========================================="
+
+              $url = $null
+
+              $patterns = @(
+                  'https://[a-zA-Z0-9-]+\.trycloudflare\.com',
+                  'https://[a-zA-Z0-9-]+\.trycloudflare\.com:[0-9]+'
+              )
+
+              for ($i = 0; $i -lt $TimeoutSeconds; $i++) {
+
+                  $log = Get-TunnelLog `
+                      -OutFile $OutFile `
+                      -ErrFile $ErrFile
+
+                  foreach ($pattern in $patterns) {
+
+                      $match = [regex]::Match(
+                          $log,
+                          $pattern,
+                          [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+                      )
+
+                      if ($match.Success) {
+                          $url = $match.Value
+                          break
+                      }
+                  }
+
+                  if ($url) {
+                      break
+                  }
+
+                  Write-Host "[$($i + 1)/$TimeoutSeconds] URL not found yet..."
+
+                  Start-Sleep -Seconds 1
+              }
+
+              if (-not $url) {
+
+                  Write-Host ""
+                  Write-Host "=========================================="
+                  Write-Host "$Name LOG"
+                  Write-Host "=========================================="
+
+                  $finalLog = Get-TunnelLog `
+                      -OutFile $OutFile `
+                      -ErrFile $ErrFile
+
+                  if ($finalLog) {
+                      Write-Host $finalLog
+                  }
+                  else {
+                      Write-Host "LOG IS EMPTY."
+                      Write-Host "Output file: $OutFile"
+                      Write-Host "Error file : $ErrFile"
+                  }
+
+                  Write-Host ""
+                  throw "$Name Cloudflare URL not found after $TimeoutSeconds seconds."
+              }
+
+              Write-Host ""
+              Write-Host "Cloudflare URL found:"
+              Write-Host $url
+
+              return $url
+          }
+
+
+          # ======================================================
+          # FUNCTION: UPDATE CLOUDFLARE WORKER
+          # ======================================================
+
+          function Update-Worker {
+              param (
+                  [string]$AccountId,
+                  [string]$WorkerName,
+                  [string]$Token,
+                  [string]$TargetUrl,
+                  [string]$WorkerType
+              )
+
+              Write-Host ""
+              Write-Host "=========================================="
+              Write-Host "Updating $WorkerType Worker"
+              Write-Host "=========================================="
+
+              Write-Host "Target:"
+              Write-Host $TargetUrl
+
+              $code = @"
+          addEventListener('fetch', event => {
+            event.respondWith(handleRequest(event.request))
+          });
+
+          async function handleRequest(request) {
+            const url = new URL(request.url);
+            const targetUrl = '$TargetUrl';
+            const newUrl = targetUrl + url.pathname + url.search;
+
+            return fetch(new Request(newUrl, {
+              method: request.method,
+              headers: request.headers,
+              body: request.body
+            }));
+          }
+          "@
+
+              $fileName = if ($WorkerType -eq "VMess") {
+                  "C:\Xray\worker-vmess.js"
+              }
+              else {
+                  "C:\Xray\worker-trojan.js"
+              }
+
+              Set-Content `
+                  -Path $fileName `
+                  -Value $code `
+                  -Encoding UTF8
+
+              $headers = @{
+                  Authorization = "Bearer $Token"
+                  "Content-Type" = "application/javascript"
+              }
+
+              $body = Get-Content `
+                  $fileName `
+                  -Raw
+
+              $uri = "https://api.cloudflare.com/client/v4/accounts/$AccountId/workers/scripts/$WorkerName"
+
+              try {
+
+                  $response = Invoke-RestMethod `
+                      -Uri $uri `
+                      -Method Put `
+                      -Headers $headers `
+                      -Body $body
+
+                  Write-Host ""
+                  Write-Host "$WorkerType Worker updated successfully."
+
+              }
+              catch {
+
+                  Write-Host ""
+                  Write-Host "ERROR updating $WorkerType Worker:"
+                  Write-Host $_
+
+                  throw
+              }
+          }
+
+
+          # ======================================================
+          # VMESS
+          # ======================================================
 
           $vmessToken = $env:VMESS_TOKEN
-          $vmessAccountId = "e96a2dd0c1de68077e282bab0f5e64af"
 
-          Write-Host "=========================================="
-          Write-Host "Updating VMess Worker"
-          Write-Host "=========================================="
-
-          $logVmess = @(
-            Get-Content "C:\Xray\cf_out_2053.txt" -Raw -ErrorAction SilentlyContinue
-            Get-Content "C:\Xray\cf_err_2053.txt" -Raw -ErrorAction SilentlyContinue
-          ) -join "`n"
-
-          $urlVmess = [regex]::Match(
-            $logVmess,
-            'https://[a-zA-Z0-9-]+\.trycloudflare\.com'
-          ).Value
-
-          if ($urlVmess) {
-
-            Write-Host "Found VMess Cloudflare URL:"
-            Write-Host $urlVmess
-
-            $codeVmess = @"
-          addEventListener('fetch', event => {
-            event.respondWith(handleRequest(event.request))
-          });
-
-          async function handleRequest(request) {
-            const url = new URL(request.url);
-            const targetUrl = '$urlVmess';
-            const newUrl = targetUrl + url.pathname + url.search;
-
-            return fetch(new Request(newUrl, {
-              method: request.method,
-              headers: request.headers,
-              body: request.body
-            }));
-          }
-          "@
-
-            Set-Content `
-              -Path "C:\Xray\worker-vmess.js" `
-              -Value $codeVmess `
-              -Encoding UTF8
-
-            $headers = @{
-              Authorization = "Bearer $vmessToken"
-              "Content-Type" = "application/javascript"
-            }
-
-            $body = Get-Content `
-              "C:\Xray\worker-vmess.js" `
-              -Raw
-
-            try {
-
-              $response = Invoke-RestMethod `
-                -Uri "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" `
-                -Method Put `
-                -Headers $headers `
-                -Body $body
-
-              Write-Host "VMess Worker updated successfully."
-
-            }
-            catch {
-
-              Write-Host "VMess Worker update failed."
-              Write-Host $_
-              exit 1
-
-            }
-
-          }
-          else {
-
-            Write-Host "VMess Cloudflare URL not found."
-            Write-Host "Check:"
-            Write-Host "C:\Xray\cf_out_2053.txt"
-            Write-Host "C:\Xray\cf_err_2053.txt"
-
-            exit 1
+          if ([string]::IsNullOrWhiteSpace($vmessToken)) {
+              throw "CF_TOKEN_VMESS secret is empty or missing."
           }
 
+          $urlVmess = Wait-ForCloudflareUrl `
+              -OutFile $vmessOut `
+              -ErrFile $vmessErr `
+              -Name "VMess" `
+              -TimeoutSeconds 60
 
-          # ==========================================
-          # ACCOUNT 2: Trojan Worker
-          # ==========================================
+          Update-Worker `
+              -AccountId $vmessAccountId `
+              -WorkerName $vmessWorkerName `
+              -Token $vmessToken `
+              -TargetUrl $urlVmess `
+              -WorkerType "VMess"
+
+
+          # ======================================================
+          # TROJAN
+          # ======================================================
 
           $trojanToken = $env:TROJAN_TOKEN
-          $trojanAccountId = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
+
+          if ([string]::IsNullOrWhiteSpace($trojanToken)) {
+              throw "CF_TOKEN_TROJAN secret is empty or missing."
+          }
+
+          $urlTrojan = Wait-ForCloudflareUrl `
+              -OutFile $trojanOut `
+              -ErrFile $trojanErr `
+              -Name "Trojan" `
+              -TimeoutSeconds 60
+
+          Update-Worker `
+              -AccountId $trojanAccountId `
+              -WorkerName $trojanWorkerName `
+              -Token $trojanToken `
+              -TargetUrl $urlTrojan `
+              -WorkerType "Trojan"
+
+
+          # ======================================================
+          # DONE
+          # ======================================================
 
           Write-Host ""
           Write-Host "=========================================="
-          Write-Host "Updating Trojan Worker"
+          Write-Host "BOTH WORKERS UPDATED SUCCESSFULLY"
           Write-Host "=========================================="
 
-          $logTrojan = @(
-            Get-Content "C:\Xray\cf_out_2083.txt" -Raw -ErrorAction SilentlyContinue
-            Get-Content "C:\Xray\cf_err_2083.txt" -Raw -ErrorAction SilentlyContinue
-          ) -join "`n"
-
-          $urlTrojan = [regex]::Match(
-            $logTrojan,
-            'https://[a-zA-Z0-9-]+\.trycloudflare\.com'
-          ).Value
-
-          if ($urlTrojan) {
-
-            Write-Host "Found Trojan Cloudflare URL:"
-            Write-Host $urlTrojan
-
-            $codeTrojan = @"
-          addEventListener('fetch', event => {
-            event.respondWith(handleRequest(event.request))
-          });
-
-          async function handleRequest(request) {
-            const url = new URL(request.url);
-            const targetUrl = '$urlTrojan';
-            const newUrl = targetUrl + url.pathname + url.search;
-
-            return fetch(new Request(newUrl, {
-              method: request.method,
-              headers: request.headers,
-              body: request.body
-            }));
-          }
-          "@
-
-            Set-Content `
-              -Path "C:\Xray\worker-trojan.js" `
-              -Value $codeTrojan `
-              -Encoding UTF8
-
-            $headers = @{
-              Authorization = "Bearer $trojanToken"
-              "Content-Type" = "application/javascript"
-            }
-
-            $body = Get-Content `
-              "C:\Xray\worker-trojan.js" `
-              -Raw
-
-            try {
-
-              $response = Invoke-RestMethod `
-                -Uri "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" `
-                -Method Put `
-                -Headers $headers `
-                -Body $body
-
-              Write-Host "Trojan Worker updated successfully."
-
-            }
-            catch {
-
-              Write-Host "Trojan Worker update failed."
-              Write-Host $_
-              exit 1
-
-            }
-
-          }
-          else {
-
-            Write-Host "Trojan Cloudflare URL not found."
-            Write-Host "Check:"
-            Write-Host "C:\Xray\cf_out_2083.txt"
-            Write-Host "C:\Xray\cf_err_2083.txt"
-
-            exit 1
-          }
+          Write-Host "VMess URL : $urlVmess"
+          Write-Host "Trojan URL: $urlTrojan"
 
 
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "Both Workers Updated"
-          Write-Host "=========================================="
-
+      # ==========================================================
+      # GENERATE LINKS
+      # ==========================================================
 
       - name: Generate Worker Links (VMess + Trojan)
         shell: pwsh
         env:
           UPDATE_SECRET: ${{ secrets.UPDATE_SECRET }}
+
         run: |
 
-          # ==========================================
+          $ErrorActionPreference = "Stop"
+
+          # ======================================================
           # CONFIG
-          # ==========================================
+          # ======================================================
 
           $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
           $serverId = "server1"
+
           $secret = $env:UPDATE_SECRET
 
+          if ([string]::IsNullOrWhiteSpace($secret)) {
+              throw "UPDATE_SECRET secret is empty or missing."
+          }
 
-          # ==========================================
-          # VMess Link
-          # ==========================================
 
+          # ======================================================
+          # VMESS
+          # ======================================================
+
+          Write-Host ""
           Write-Host "=========================================="
           Write-Host "Generating VMess Link"
           Write-Host "=========================================="
@@ -225,74 +335,76 @@ jobs:
           $domainVmess = "my-vpn-worker.hosseinderees7.workers.dev"
 
           $vmessObj = [ordered]@{
-            v    = "2"
-            ps   = "WRK_VMess"
-            add  = $domainVmess
-            port = 443
-            id   = $uuid
-            aid  = 0
-            scy  = "zero"
-            net  = "ws"
-            type = "none"
-            host = ""
-            path = "/"
-            tls  = "tls"
-            sni  = ""
-            alpn = ""
-            fp   = ""
+              v    = "2"
+              ps   = "WRK_VMess"
+              add  = $domainVmess
+              port = 443
+              id   = $uuid
+              aid  = 0
+              scy  = "zero"
+              net  = "ws"
+              type = "none"
+              host = ""
+              path = "/"
+              tls  = "tls"
+              sni  = ""
+              alpn = ""
+              fp   = ""
           }
 
           $jsonVmess = $vmessObj | ConvertTo-Json -Compress
 
-          $bytesVmess = [
-            System.Text.Encoding
-          ]::UTF8.GetBytes($jsonVmess)
+          $bytesVmess = [System.Text.Encoding]::UTF8.GetBytes(
+              $jsonVmess
+          )
 
-          $vmessBase64 = [
-            System.Convert
-          ]::ToBase64String($bytesVmess)
+          $base64Vmess = [System.Convert]::ToBase64String(
+              $bytesVmess
+          )
 
-          $vmessLink = "vmess://$vmessBase64"
+          $vmessLink = "vmess://$base64Vmess"
+
+          Write-Host "VMess link generated."
 
 
-          # ==========================================
-          # Send VMess Link
-          # ==========================================
+          # ======================================================
+          # SEND VMESS
+          # ======================================================
 
           $bodyVmess = @{
-            server_id = $serverId
-            vmess     = $vmessLink
+              server_id = $serverId
+              vmess = $vmessLink
           } | ConvertTo-Json
 
           try {
 
-            Invoke-RestMethod `
-              -Uri "https://miradig.ir/update" `
-              -Method Post `
-              -Headers @{
-                Authorization = "Bearer $secret"
-              } `
-              -Body $bodyVmess `
-              -ContentType "application/json"
+              Invoke-RestMethod `
+                  -Uri "https://miradig.ir/update" `
+                  -Method Post `
+                  -Headers @{
+                      Authorization = "Bearer $secret"
+                  } `
+                  -Body $bodyVmess `
+                  -ContentType "application/json"
 
-            Write-Host "VMess link sent successfully."
+              Write-Host "VMess link sent successfully."
 
           }
           catch {
 
-            Write-Host "Failed to send VMess link."
-            Write-Host $_
-            exit 1
+              Write-Host "Failed to send VMess link."
+              Write-Host $_
 
+              throw
           }
 
           Write-Host "VMess Link:"
           Write-Host $vmessLink
 
 
-          # ==========================================
-          # Trojan Link
-          # ==========================================
+          # ======================================================
+          # TROJAN
+          # ======================================================
 
           Write-Host ""
           Write-Host "=========================================="
@@ -303,47 +415,49 @@ jobs:
 
           $trojanLink = "trojan://${uuid}@${domainTrojan}:443?path=%2F&security=tls&type=ws#WRK_Trojan"
 
+          Write-Host "Trojan link generated."
 
-          # ==========================================
-          # Send Trojan Link
-          # ==========================================
+
+          # ======================================================
+          # SEND TROJAN
+          # ======================================================
 
           $bodyTrojan = @{
-            server_id = $serverId
-            trojan    = $trojanLink
+              server_id = $serverId
+              trojan = $trojanLink
           } | ConvertTo-Json
 
           try {
 
-            Invoke-RestMethod `
-              -Uri "https://miradig.ir/update" `
-              -Method Post `
-              -Headers @{
-                Authorization = "Bearer $secret"
-              } `
-              -Body $bodyTrojan `
-              -ContentType "application/json"
+              Invoke-RestMethod `
+                  -Uri "https://miradig.ir/update" `
+                  -Method Post `
+                  -Headers @{
+                      Authorization = "Bearer $secret"
+                  } `
+                  -Body $bodyTrojan `
+                  -ContentType "application/json"
 
-            Write-Host "Trojan link sent successfully."
+              Write-Host "Trojan link sent successfully."
 
           }
           catch {
 
-            Write-Host "Failed to send Trojan link."
-            Write-Host $_
-            exit 1
+              Write-Host "Failed to send Trojan link."
+              Write-Host $_
 
+              throw
           }
 
           Write-Host "Trojan Link:"
           Write-Host $trojanLink
 
 
-          # ==========================================
-          # DONE
-          # ==========================================
+          # ======================================================
+          # FINAL
+          # ======================================================
 
           Write-Host ""
           Write-Host "=========================================="
-          Write-Host "All links generated and sent successfully."
+          Write-Host "ALL LINKS SENT SUCCESSFULLY"
           Write-Host "=========================================="
