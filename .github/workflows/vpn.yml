@@ -28,7 +28,8 @@
       "@
             [System.IO.File]::WriteAllText("C:\Xray\worker-vmess.js", $workerCodeVmess)
             
-            $response = curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" -H "Authorization: Bearer $vmessToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-vmess.js"
+            # استفاده از curl.exe با --data-binary
+            curl.exe -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" -H "Authorization: Bearer $vmessToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-vmess.js"
             Write-Host "✅ Worker 1 (VMess) updated on account: $vmessAccountId"
           } else {
             Write-Host "❌ VMess URL not found! Check logs."
@@ -62,7 +63,7 @@
       "@
             [System.IO.File]::WriteAllText("C:\Xray\worker-trojan.js", $workerCodeTrojan)
             
-            $response = curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" -H "Authorization: Bearer $trojanToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-trojan.js"
+            curl.exe -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" -H "Authorization: Bearer $trojanToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-trojan.js"
             Write-Host "✅ Worker 2 (Trojan) updated on account: $trojanAccountId"
           } else {
             Write-Host "❌ Trojan URL not found! Check logs."
@@ -86,7 +87,7 @@
             Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
             Write-Host "✅ VMess link sent to host"
           } catch {
-            Write-Host "❌ Failed to send VMess link"
+            Write-Host "❌ Failed to send VMess link: $_"
           }
           
           Write-Host ""
@@ -103,7 +104,7 @@
             Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
             Write-Host "✅ Trojan link sent to host"
           } catch {
-            Write-Host "❌ Failed to send Trojan link"
+            Write-Host "❌ Failed to send Trojan link: $_"
           }
           
           Write-Host ""
