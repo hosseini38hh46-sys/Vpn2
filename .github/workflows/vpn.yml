@@ -1,4 +1,5 @@
 - name: Update 2 Workers (VMess + Trojan)
+        shell: powershell
         run: |
           # ==========================================
           # ACCOUNT 1: VMess Worker
@@ -10,23 +11,8 @@
           $urlVmess = $logVmess | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
           if ($urlVmess) {
-            $workerCodeVmess = @"
-      addEventListener('fetch', event => {
-        event.respondWith(handleRequest(event.request))
-      })
-      
-      async function handleRequest(request) {
-        const url = new URL(request.url);
-        const targetUrl = '$urlVmess';
-        const newUrl = targetUrl + url.pathname + url.search;
-        return fetch(new Request(newUrl, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body
-        }));
-      }
-"@
-            $workerCodeVmess | Out-File -FilePath "C:\Xray\worker-vmess.js" -Encoding utf8
+            $codeVmess = "addEventListener('fetch', event => { event.respondWith(handleRequest(event.request)) }); async function handleRequest(request) { const url = new URL(request.url); const targetUrl = '$urlVmess'; const newUrl = targetUrl + url.pathname + url.search; return fetch(new Request(newUrl, { method: request.method, headers: request.headers, body: request.body })); }"
+            Set-Content -Path "C:\Xray\worker-vmess.js" -Value $codeVmess -Encoding UTF8
             
             $headers = @{
               "Authorization" = "Bearer $vmessToken"
@@ -49,23 +35,8 @@
           $urlTrojan = $logTrojan | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
           if ($urlTrojan) {
-            $workerCodeTrojan = @"
-      addEventListener('fetch', event => {
-        event.respondWith(handleRequest(event.request))
-      })
-      
-      async function handleRequest(request) {
-        const url = new URL(request.url);
-        const targetUrl = '$urlTrojan';
-        const newUrl = targetUrl + url.pathname + url.search;
-        return fetch(new Request(newUrl, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body
-        }));
-      }
-"@
-            $workerCodeTrojan | Out-File -FilePath "C:\Xray\worker-trojan.js" -Encoding utf8
+            $codeTrojan = "addEventListener('fetch', event => { event.respondWith(handleRequest(event.request)) }); async function handleRequest(request) { const url = new URL(request.url); const targetUrl = '$urlTrojan'; const newUrl = targetUrl + url.pathname + url.search; return fetch(new Request(newUrl, { method: request.method, headers: request.headers, body: request.body })); }"
+            Set-Content -Path "C:\Xray\worker-trojan.js" -Value $codeTrojan -Encoding UTF8
             
             $headers = @{
               "Authorization" = "Bearer $trojanToken"
@@ -79,33 +50,34 @@
           }
 
       - name: Generate Worker Links (VMess + Trojan)
+        shell: powershell
         run: |
           $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
           $secret = "fasjfajf09wjf9jawfj0j"
           $serverId = "server1"
           
-          # VMess Link
+          # VMess Link Construction
           $domainVmess = "my-vpn-worker.hosseinderees7.workers.dev"
-          $vmessObj = @{
-            v = "2"
-            ps = "WRK_VMess"
-            add = $domainVmess
+          $vmessObj = [ordered]@{
+            v    = "2"
+            ps   = "WRK_VMess"
+            add  = $domainVmess
             port = 443
-            id = $uuid
-            aid = 0
-            scy = "zero"
-            net = "ws"
+            id   = $uuid
+            aid  = 0
+            scy  = "zero"
+            net  = "ws"
             type = "none"
             host = ""
             path = "/"
-            tls = "tls"
-            sni = ""
+            tls  = "tls"
+            sni  = ""
             alpn = ""
-            fp = ""
+            fp   = ""
           }
           $jsonVmess = $vmessObj | ConvertTo-Json -Compress
-          $vmessBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonVmess)
-          $vmessLink = "vmess://" + [System.Convert]::ToBase64String($vmessBytes)
+          $bytesVmess = [System.Text.Encoding]::UTF8.GetBytes($jsonVmess)
+          $vmessLink = "vmess://" + [System.Convert]::ToBase64String($bytesVmess)
           
           $bodyVmess = @{ server_id = $serverId; vmess = $vmessLink } | ConvertTo-Json
           try {
@@ -116,7 +88,7 @@
           }
           Write-Host "🔗 VMess Link: $vmessLink"
           
-          # Trojan Link
+          # Trojan Link Construction
           $domainTrojan = "little-frost-5a54.nest-dev-full-stack.workers.dev"
           $trojanLink = "trojan://${uuid}@${domainTrojan}:443?path=%2F&security=tls&type=ws#WRK_Trojan"
           
