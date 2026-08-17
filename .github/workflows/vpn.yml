@@ -9,7 +9,6 @@ jobs:
     timeout-minutes: 360
 
     steps:
-
       - name: Install Xray and Cloudflared
         shell: powershell
         run: |
@@ -32,7 +31,6 @@ jobs:
             -OutFile "cloudflared.exe"
 
           Write-Host "Xray and Cloudflared installed."
-
 
       - name: Create Xray Config
         shell: powershell
@@ -105,8 +103,6 @@ jobs:
           )
 
           Write-Host "Xray config created."
-          Write-Host $json
-
 
       - name: Validate Xray Config
         shell: powershell
@@ -118,7 +114,6 @@ jobs:
           }
 
           Write-Host "Xray config is valid."
-
 
       - name: Open Firewall
         shell: powershell
@@ -137,7 +132,6 @@ jobs:
 
             Write-Host "Firewall opened for port $port"
           }
-
 
       - name: Start Xray
         shell: powershell
@@ -159,7 +153,6 @@ jobs:
           }
 
           Write-Host "Xray started successfully."
-
 
       - name: Start Cloudflared
         shell: powershell
@@ -188,9 +181,7 @@ jobs:
           Start-Sleep -Seconds 20
 
           $cloudflared = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
-
           Write-Host "Cloudflared processes: $($cloudflared.Count)"
-
 
       - name: Get Cloudflare URLs
         shell: powershell
@@ -203,18 +194,10 @@ jobs:
 
           $urlVmess = $logVmess |
             Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' |
-            ForEach-Object {
-              $_.Matches.Value
-            } |
+            ForEach-Object { $_.Matches.Value } |
             Select-Object -First 1
 
           if (-not $urlVmess) {
-            Write-Host "===== VMess OUT ====="
-            Get-Content "C:\Xray\cf_out_2053.txt" -ErrorAction SilentlyContinue
-
-            Write-Host "===== VMess ERR ====="
-            Get-Content "C:\Xray\cf_err_2053.txt" -ErrorAction SilentlyContinue
-
             throw "VMess Cloudflare URL not found."
           }
 
@@ -226,18 +209,10 @@ jobs:
 
           $urlTrojan = $logTrojan |
             Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' |
-            ForEach-Object {
-              $_.Matches.Value
-            } |
+            ForEach-Object { $_.Matches.Value } |
             Select-Object -First 1
 
           if (-not $urlTrojan) {
-            Write-Host "===== Trojan OUT ====="
-            Get-Content "C:\Xray\cf_out_2083.txt" -ErrorAction SilentlyContinue
-
-            Write-Host "===== Trojan ERR ====="
-            Get-Content "C:\Xray\cf_err_2083.txt" -ErrorAction SilentlyContinue
-
             throw "Trojan Cloudflare URL not found."
           }
 
@@ -246,7 +221,6 @@ jobs:
 
           "VMESS_TUNNEL_URL=$urlVmess" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "TROJAN_TUNNEL_URL=$urlTrojan" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
 
       - name: Update VMess Worker
         shell: powershell
@@ -258,47 +232,23 @@ jobs:
           $token = $env:CF_TOKEN_VMESS
           $targetUrl = $env:VMESS_TUNNEL_URL
 
-          if ([string]::IsNullOrWhiteSpace($token)) {
-            throw "CF_TOKEN_VMESS is missing."
-          }
+          if ([string]::IsNullOrWhiteSpace($token)) { throw "CF_TOKEN_VMESS is missing." }
+          if ([string]::IsNullOrWhiteSpace($targetUrl)) { throw "VMESS_TUNNEL_URL is missing." }
 
-          if ([string]::IsNullOrWhiteSpace($targetUrl)) {
-            throw "VMESS_TUNNEL_URL is missing."
-          }
-
-          $workerCode = @(
-            "addEventListener('fetch', event => {"
-            "  event.respondWith(handleRequest(event.request));"
-            "});"
-            ""
-            "async function handleRequest(request) {"
-            "  const url = new URL(request.url);"
-            "  const targetUrl = '$targetUrl';"
-            "  const newUrl = targetUrl + url.pathname + url.search;"
-            ""
-            "  return fetch(new Request(newUrl, {"
-            "    method: request.method,"
-            "    headers: request.headers,"
-            "    body: request.body"
-            "  }));"
-            "}"
-          ) -join "`n"
+          $workerCode = "addEventListener('fetch', event => { event.respondWith(handleRequest(event.request)); }); async function handleRequest(request) { const url = new URL(request.url); const targetUrl = '$targetUrl'; const newUrl = targetUrl + url.pathname + url.search; return fetch(new Request(newUrl, { method: request.method, headers: request.headers, body: request.body })); }"
 
           $headers = @{
             Authorization = "Bearer $token"
             "Content-Type" = "application/javascript"
           }
 
-          $uri = "https://api.cloudflare.com/client/v4/accounts/$accountId/workers/scripts/$workerName"
-
           Invoke-RestMethod `
-            -Uri $uri `
+            -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId/workers/scripts/$workerName" `
             -Method Put `
             -Headers $headers `
             -Body $workerCode
 
           Write-Host "VMess Worker updated successfully."
-
 
       - name: Update Trojan Worker
         shell: powershell
@@ -310,47 +260,23 @@ jobs:
           $token = $env:CF_TOKEN_TROJAN
           $targetUrl = $env:TROJAN_TUNNEL_URL
 
-          if ([string]::IsNullOrWhiteSpace($token)) {
-            throw "CF_TOKEN_TROJAN is missing."
-          }
+          if ([string]::IsNullOrWhiteSpace($token)) { throw "CF_TOKEN_TROJAN is missing." }
+          if ([string]::IsNullOrWhiteSpace($targetUrl)) { throw "TROJAN_TUNNEL_URL is missing." }
 
-          if ([string]::IsNullOrWhiteSpace($targetUrl)) {
-            throw "TROJAN_TUNNEL_URL is missing."
-          }
-
-          $workerCode = @(
-            "addEventListener('fetch', event => {"
-            "  event.respondWith(handleRequest(event.request));"
-            "});"
-            ""
-            "async function handleRequest(request) {"
-            "  const url = new URL(request.url);"
-            "  const targetUrl = '$targetUrl';"
-            "  const newUrl = targetUrl + url.pathname + url.search;"
-            ""
-            "  return fetch(new Request(newUrl, {"
-            "    method: request.method,"
-            "    headers: request.headers,"
-            "    body: request.body"
-            "  }));"
-            "}"
-          ) -join "`n"
+          $workerCode = "addEventListener('fetch', event => { event.respondWith(handleRequest(event.request)); }); async function handleRequest(request) { const url = new URL(request.url); const targetUrl = '$targetUrl'; const newUrl = targetUrl + url.pathname + url.search; return fetch(new Request(newUrl, { method: request.method, headers: request.headers, body: request.body })); }"
 
           $headers = @{
             Authorization = "Bearer $token"
             "Content-Type" = "application/javascript"
           }
 
-          $uri = "https://api.cloudflare.com/client/v4/accounts/$accountId/workers/scripts/$workerName"
-
           Invoke-RestMethod `
-            -Uri $uri `
+            -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId/workers/scripts/$workerName" `
             -Method Put `
             -Headers $headers `
             -Body $workerCode
 
           Write-Host "Trojan Worker updated successfully."
-
 
       - name: Generate and Send VMess Link
         shell: powershell
@@ -362,9 +288,7 @@ jobs:
           $secret = $env:UPDATE_SECRET
           $domain = "my-vpn-worker.hosseinderees7.workers.dev"
 
-          if ([string]::IsNullOrWhiteSpace($secret)) {
-            throw "UPDATE_SECRET is missing."
-          }
+          if ([string]::IsNullOrWhiteSpace($secret)) { throw "UPDATE_SECRET is missing." }
 
           $vmessObject = [ordered]@{
             v = "2"
@@ -394,18 +318,24 @@ jobs:
             vmess = $link
           } | ConvertTo-Json -Compress
 
-          Invoke-RestMethod `
-            -Uri "https://miradig.ir/update" `
-            -Method Post `
-            -Headers @{
-              Authorization = "Bearer $secret"
-            } `
-            -Body $body `
-            -ContentType "application/json" `
-            -TimeoutSec 15
-
-          Write-Host "VMess link sent successfully."
-
+          try {
+            $response = Invoke-RestMethod `
+              -Uri "https://miradig.ir/update" `
+              -Method Post `
+              -Headers @{ Authorization = "Bearer $secret" } `
+              -Body $body `
+              -ContentType "application/json" `
+              -TimeoutSec 15
+            Write-Host "✅ VMess link sent successfully."
+          } catch {
+            Write-Host "❌ Failed to send VMess link."
+            if ($_.Exception.Response) {
+              $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+              Write-Host "Server response: $($reader.ReadToEnd())"
+            } else {
+              Write-Host $_.Exception.Message
+            }
+          }
 
       - name: Generate and Send Trojan Link
         shell: powershell
@@ -417,9 +347,7 @@ jobs:
           $secret = $env:UPDATE_SECRET
           $domain = "little-frost-5a54.nest-dev-full-stack.workers.dev"
 
-          if ([string]::IsNullOrWhiteSpace($secret)) {
-            throw "UPDATE_SECRET is missing."
-          }
+          if ([string]::IsNullOrWhiteSpace($secret)) { throw "UPDATE_SECRET is missing." }
 
           $link = "trojan://${trojanPassword}@${domain}:443?path=%2F&security=tls&type=ws#WRK_Trojan"
 
@@ -428,18 +356,24 @@ jobs:
             trojan = $link
           } | ConvertTo-Json -Compress
 
-          Invoke-RestMethod `
-            -Uri "https://miradig.ir/update" `
-            -Method Post `
-            -Headers @{
-              Authorization = "Bearer $secret"
-            } `
-            -Body $body `
-            -ContentType "application/json" `
-            -TimeoutSec 15
-
-          Write-Host "Trojan link sent successfully."
-
+          try {
+            $response = Invoke-RestMethod `
+              -Uri "https://miradig.ir/update" `
+              -Method Post `
+              -Headers @{ Authorization = "Bearer $secret" } `
+              -Body $body `
+              -ContentType "application/json" `
+              -TimeoutSec 15
+            Write-Host "✅ Trojan link sent successfully."
+          } catch {
+            Write-Host "❌ Failed to send Trojan link."
+            if ($_.Exception.Response) {
+              $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+              Write-Host "Server response: $($reader.ReadToEnd())"
+            } else {
+              Write-Host $_.Exception.Message
+            }
+          }
 
       - name: Keep Alive
         shell: powershell
