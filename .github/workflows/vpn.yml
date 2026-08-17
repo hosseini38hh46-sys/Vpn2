@@ -6,7 +6,6 @@
           $vmessToken = "${{ secrets.CF_TOKEN_VMESS }}"
           $vmessAccountId = "e96a2dd0c1de68077e282bab0f5e64af"
           
-          # لاگ Cloudflare Tunnel برای VMess (پورت 2053)
           $logVmess = Get-Content "C:\Xray\cf_out_2053.txt", "C:\Xray\cf_err_2053.txt" -Raw -ErrorAction SilentlyContinue
           $urlVmess = $logVmess | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
@@ -29,7 +28,7 @@
       "@
             [System.IO.File]::WriteAllText("C:\Xray\worker-vmess.js", $workerCodeVmess)
             
-            $response = & curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/vpn-vmess" -H "Authorization: Bearer $vmessToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-vmess.js"
+            $response = curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" -H "Authorization: Bearer $vmessToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-vmess.js"
             Write-Host "✅ Worker 1 (VMess) updated on account: $vmessAccountId"
           } else {
             Write-Host "❌ VMess URL not found! Check logs."
@@ -41,7 +40,6 @@
           $trojanToken = "${{ secrets.CF_TOKEN_TROJAN }}"
           $trojanAccountId = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
           
-          # لاگ Cloudflare Tunnel برای Trojan (پورت 2083)
           $logTrojan = Get-Content "C:\Xray\cf_out_2083.txt", "C:\Xray\cf_err_2083.txt" -Raw -ErrorAction SilentlyContinue
           $urlTrojan = $logTrojan | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
@@ -64,7 +62,7 @@
       "@
             [System.IO.File]::WriteAllText("C:\Xray\worker-trojan.js", $workerCodeTrojan)
             
-            $response = & curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/vpn-trojan" -H "Authorization: Bearer $trojanToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-trojan.js"
+            $response = curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" -H "Authorization: Bearer $trojanToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-trojan.js"
             Write-Host "✅ Worker 2 (Trojan) updated on account: $trojanAccountId"
           } else {
             Write-Host "❌ Trojan URL not found! Check logs."
@@ -79,39 +77,39 @@
           # ==========================================
           # VMess Link (Worker 1)
           # ==========================================
-          $domainVmess = "vpn-vmess.hosseinderees7.workers.dev"  # این رو با دامنه‌ی واقعی ورکرت عوض کن
+          $domainVmess = "my-vpn-worker.hosseinderees7.workers.dev"
           $jsonVmess = "{`"add`":`"$domainVmess`",`"aid`":0,`"id`":`"$uuid`",`"net`":`"ws`",`"path`":`"/`",`"port`":443,`"type`":`"none`",`"tls`":`"tls`",`"ps`":`"WRK_VMess`"}"
           $vmessLink = "vmess://" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jsonVmess))
           
-          # ارسال به هاست
           $body = @{ server_id = $serverId; vmess = $vmessLink } | ConvertTo-Json
           try {
             Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
             Write-Host "✅ VMess link sent to host"
           } catch {
-            Write-Host "❌ Failed to send VMess link: $_"
+            Write-Host "❌ Failed to send VMess link"
           }
           
+          Write-Host ""
           Write-Host "🔗 VMess Link: $vmessLink"
-
+          
           # ==========================================
           # Trojan Link (Worker 2)
           # ==========================================
-          $domainTrojan = "vpn-trojan.hosseinderees7.workers.dev"  # این رو با دامنه‌ی واقعی ورکرت عوض کن
+          $domainTrojan = "little-frost-5a54.nest-dev-full-stack.workers.dev"
           $trojanLink = "trojan://${uuid}@${domainTrojan}:443?path=/&security=tls&type=ws#WRK_Trojan"
           
-          # ارسال به هاست
           $body = @{ server_id = $serverId; vmess = $trojanLink } | ConvertTo-Json
           try {
             Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
             Write-Host "✅ Trojan link sent to host"
           } catch {
-            Write-Host "❌ Failed to send Trojan link: $_"
+            Write-Host "❌ Failed to send Trojan link"
           }
           
+          Write-Host ""
           Write-Host "🔗 Trojan Link: $trojanLink"
           
           Write-Host ""
           Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "  ALL WORKERS UPDATED SUCCESSFULLY!" -ForegroundColor Cyan
+          Write-Host "  ✅ ALL WORKERS UPDATED SUCCESSFULLY!" -ForegroundColor Cyan
           Write-Host "==================================================" -ForegroundColor Green
