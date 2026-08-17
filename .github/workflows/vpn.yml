@@ -1,4 +1,4 @@
-      - name: Update 2 Workers (VMess + Trojan)
+- name: Update 2 Workers (VMess + Trojan)
         run: |
           # ==========================================
           # ACCOUNT 1: VMess Worker
@@ -25,11 +25,15 @@
           body: request.body
         }));
       }
-      "@
-            [System.IO.File]::WriteAllText("C:\Xray\worker-vmess.js", $workerCodeVmess)
+"@
+            $workerCodeVmess | Out-File -FilePath "C:\Xray\worker-vmess.js" -Encoding utf8
             
-            # استفاده از curl.exe با --data-binary
-            curl.exe -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" -H "Authorization: Bearer $vmessToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-vmess.js"
+            $headers = @{
+              "Authorization" = "Bearer $vmessToken"
+              "Content-Type" = "application/javascript"
+            }
+            $body = Get-Content "C:\Xray\worker-vmess.js" -Raw
+            Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" -Method Put -Headers $headers -Body $body
             Write-Host "✅ Worker 1 (VMess) updated on account: $vmessAccountId"
           } else {
             Write-Host "❌ VMess URL not found! Check logs."
@@ -60,10 +64,15 @@
           body: request.body
         }));
       }
-      "@
-            [System.IO.File]::WriteAllText("C:\Xray\worker-trojan.js", $workerCodeTrojan)
+"@
+            $workerCodeTrojan | Out-File -FilePath "C:\Xray\worker-trojan.js" -Encoding utf8
             
-            curl.exe -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" -H "Authorization: Bearer $trojanToken" -H "Content-Type: application/javascript" --data-binary "@C:\Xray\worker-trojan.js"
+            $headers = @{
+              "Authorization" = "Bearer $trojanToken"
+              "Content-Type" = "application/javascript"
+            }
+            $body = Get-Content "C:\Xray\worker-trojan.js" -Raw
+            Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" -Method Put -Headers $headers -Body $body
             Write-Host "✅ Worker 2 (Trojan) updated on account: $trojanAccountId"
           } else {
             Write-Host "❌ Trojan URL not found! Check logs."
@@ -75,42 +84,47 @@
           $secret = "fasjfajf09wjf9jawfj0j"
           $serverId = "server1"
           
-          # ==========================================
-          # VMess Link (Worker 1)
-          # ==========================================
+          # VMess Link
           $domainVmess = "my-vpn-worker.hosseinderees7.workers.dev"
-          $jsonVmess = "{`"add`":`"$domainVmess`",`"aid`":0,`"id`":`"$uuid`",`"net`":`"ws`",`"path`":`"/`",`"port`":443,`"type`":`"none`",`"tls`":`"tls`",`"ps`":`"WRK_VMess`"}"
-          $vmessLink = "vmess://" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jsonVmess))
+          $vmessObj = @{
+            v = "2"
+            ps = "WRK_VMess"
+            add = $domainVmess
+            port = 443
+            id = $uuid
+            aid = 0
+            scy = "zero"
+            net = "ws"
+            type = "none"
+            host = ""
+            path = "/"
+            tls = "tls"
+            sni = ""
+            alpn = ""
+            fp = ""
+          }
+          $jsonVmess = $vmessObj | ConvertTo-Json -Compress
+          $vmessBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonVmess)
+          $vmessLink = "vmess://" + [System.Convert]::ToBase64String($vmessBytes)
           
-          $body = @{ server_id = $serverId; vmess = $vmessLink } | ConvertTo-Json
+          $bodyVmess = @{ server_id = $serverId; vmess = $vmessLink } | ConvertTo-Json
           try {
-            Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
+            Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $bodyVmess -ContentType "application/json"
             Write-Host "✅ VMess link sent to host"
           } catch {
             Write-Host "❌ Failed to send VMess link: $_"
           }
-          
-          Write-Host ""
           Write-Host "🔗 VMess Link: $vmessLink"
           
-          # ==========================================
-          # Trojan Link (Worker 2)
-          # ==========================================
+          # Trojan Link
           $domainTrojan = "little-frost-5a54.nest-dev-full-stack.workers.dev"
-          $trojanLink = "trojan://${uuid}@${domainTrojan}:443?path=/&security=tls&type=ws#WRK_Trojan"
+          $trojanLink = "trojan://${uuid}@${domainTrojan}:443?path=%2F&security=tls&type=ws#WRK_Trojan"
           
-          $body = @{ server_id = $serverId; vmess = $trojanLink } | ConvertTo-Json
+          $bodyTrojan = @{ server_id = $serverId; trojan = $trojanLink } | ConvertTo-Json
           try {
-            Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
+            Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $bodyTrojan -ContentType "application/json"
             Write-Host "✅ Trojan link sent to host"
           } catch {
             Write-Host "❌ Failed to send Trojan link: $_"
           }
-          
-          Write-Host ""
           Write-Host "🔗 Trojan Link: $trojanLink"
-          
-          Write-Host ""
-          Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "  ✅ ALL WORKERS UPDATED SUCCESSFULLY!" -ForegroundColor Cyan
-          Write-Host "==================================================" -ForegroundColor Green
