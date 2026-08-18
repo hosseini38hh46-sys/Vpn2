@@ -1,4 +1,4 @@
-name: VPN Workers - 5 Configs (2 Direct + 3 Routed)
+name: VPN Workers - 3 Protocols (VLESS, VMess, Trojan)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
           Write-Host "✅ Xray and Cloudflared installed."
 
       # ==========================================================
-      # 2. CREATE XRAY CONFIG (5 INBOUNDS)
+      # 2. CREATE XRAY CONFIG (3 INBOUNDS - NO DUPLICATE PORTS)
       # ==========================================================
       - name: Create Xray Config
         shell: powershell
@@ -37,117 +37,69 @@ jobs:
           $uuid = "5aa2ebe1-5114-4bc3-aefa-935807433e70"
           $trojanPassword = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
 
-          $inbounds = @()
-
-          # 1. VMess Direct (Worker 1) - Port 2053
-          $inbounds += @{
-            listen = "0.0.0.0"
-            port = 2053
-            protocol = "vmess"
-            settings = @{
-              clients = @(
-                @{
-                  id = $uuid
-                  alterId = 0
-                }
-              )
-            }
-            streamSettings = @{
-              network = "ws"
-              wsSettings = @{
-                path = "/"
-              }
-            }
-          }
-
-          # 2. Trojan Direct (Worker 2) - Port 2083
-          $inbounds += @{
-            listen = "0.0.0.0"
-            port = 2083
-            protocol = "trojan"
-            settings = @{
-              clients = @(
-                @{
-                  password = $trojanPassword
-                }
-              )
-            }
-            streamSettings = @{
-              network = "ws"
-              wsSettings = @{
-                path = "/"
-              }
-            }
-          }
-
-          # 3. VLESS Routed - Port 2096
-          $inbounds += @{
-            listen = "0.0.0.0"
-            port = 2096
-            protocol = "vless"
-            settings = @{
-              clients = @(
-                @{
-                  id = $uuid
-                  flow = "xtls-rprx-vision"
-                }
-              )
-              decryption = "none"
-            }
-            streamSettings = @{
-              network = "ws"
-              wsSettings = @{
-                path = "/"
-              }
-            }
-          }
-
-          # 4. VMess Routed - Port 2053 (Duplicate for routing)
-          $inbounds += @{
-            listen = "0.0.0.0"
-            port = 2053
-            protocol = "vmess"
-            settings = @{
-              clients = @(
-                @{
-                  id = $uuid
-                  alterId = 0
-                }
-              )
-            }
-            streamSettings = @{
-              network = "ws"
-              wsSettings = @{
-                path = "/"
-              }
-            }
-          }
-
-          # 5. Trojan Routed - Port 2083 (Duplicate for routing)
-          $inbounds += @{
-            listen = "0.0.0.0"
-            port = 2083
-            protocol = "trojan"
-            settings = @{
-              clients = @(
-                @{
-                  password = $trojanPassword
-                }
-              )
-            }
-            streamSettings = @{
-              network = "ws"
-              wsSettings = @{
-                path = "/"
-              }
-            }
-          }
-
           $config = @{
             log = @{
               loglevel = "warning"
             }
-            inbounds = $inbounds
+            inbounds = @(
+              @{
+                listen = "0.0.0.0"
+                port = 2053
+                protocol = "vmess"
+                settings = @{
+                  clients = @(
+                    @{
+                      id = $uuid
+                      alterId = 0
+                    }
+                  )
+                }
+                streamSettings = @{
+                  network = "ws"
+                  wsSettings = @{
+                    path = "/"
+                  }
+                }
+              },
+              @{
+                listen = "0.0.0.0"
+                port = 2083
+                protocol = "trojan"
+                settings = @{
+                  clients = @(
+                    @{
+                      password = $trojanPassword
+                    }
+                  )
+                }
+                streamSettings = @{
+                  network = "ws"
+                  wsSettings = @{
+                    path = "/"
+                  }
+                }
+              },
+              @{
+                listen = "0.0.0.0"
+                port = 2096
+                protocol = "vless"
+                settings = @{
+                  clients = @(
+                    @{
+                      id = $uuid
+                      flow = "xtls-rprx-vision"
+                    }
+                  )
+                  decryption = "none"
+                }
+                streamSettings = @{
+                  network = "ws"
+                  wsSettings = @{
+                    path = "/"
+                  }
+                }
+              }
+            )
             outbounds = @(
               @{
                 protocol = "freedom"
@@ -202,11 +154,9 @@ jobs:
         shell: powershell
         run: |
           $ports = @{ 
-            "VMESS_DIRECT" = 2053
-            "TROJAN_DIRECT" = 2083
-            "VLESS_ROUTED" = 2096
-            "VMESS_ROUTED" = 2053
-            "TROJAN_ROUTED" = 2083
+            "VMESS" = 2053
+            "TROJAN" = 2083
+            "VLESS" = 2096
           }
           Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           foreach ($key in $ports.Keys) {
@@ -218,9 +168,8 @@ jobs:
             $port = $ports[$key]
             $command = "C:\Xray\cloudflared.exe tunnel --url http://localhost:$port > C:\Xray\cf_out_${key}.txt 2> C:\Xray\cf_err_${key}.txt"
             Start-Process "cmd.exe" -ArgumentList "/c", $command -WindowStyle Hidden
-            Start-Sleep -Seconds 2
           }
-          Start-Sleep -Seconds 20
+          Start-Sleep -Seconds 15
           $cloudflared = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
           Write-Host "✅ Cloudflared processes: $($cloudflared.Count)"
 
@@ -231,11 +180,9 @@ jobs:
         shell: powershell
         run: |
           $tunnels = @{
-            "VMESS_DIRECT" = "VMESS_DIRECT_TUNNEL"
-            "TROJAN_DIRECT" = "TROJAN_DIRECT_TUNNEL"
-            "VLESS_ROUTED" = "VLESS_ROUTED_TUNNEL"
-            "VMESS_ROUTED" = "VMESS_ROUTED_TUNNEL"
-            "TROJAN_ROUTED" = "TROJAN_ROUTED_TUNNEL"
+            "VMESS" = "VMESS_TUNNEL"
+            "TROJAN" = "TROJAN_TUNNEL"
+            "VLESS" = "VLESS_TUNNEL"
           }
           foreach ($key in $tunnels.Keys) {
             $log = Get-Content "C:\Xray\cf_out_${key}.txt", "C:\Xray\cf_err_${key}.txt" -Raw -ErrorAction SilentlyContinue
@@ -258,20 +205,21 @@ jobs:
           $trojanAccountId = "1d7e90e6cc00cc6ca5494f61cdd3e92d"
           $vmessToken = $env:VMESS_TOKEN
           $trojanToken = $env:TROJAN_TOKEN
-          $vmessDirect = $env:VMESS_DIRECT_TUNNEL
-          $trojanDirect = $env:TROJAN_DIRECT_TUNNEL
+          $vmessTunnel = $env:VMESS_TUNNEL
+          $trojanTunnel = $env:TROJAN_TUNNEL
+          $vlessTunnel = $env:VLESS_TUNNEL
 
           if ([string]::IsNullOrWhiteSpace($vmessToken)) { throw "CF_TOKEN_VMESS is missing." }
           if ([string]::IsNullOrWhiteSpace($trojanToken)) { throw "CF_TOKEN_TROJAN is missing." }
 
-          # Worker 1: VMess Direct
+          # Worker 1: VMess (Direct)
           $workerCode1 = @"
           addEventListener('fetch', event => {
             event.respondWith(handleRequest(event.request));
           });
           async function handleRequest(request) {
             const url = new URL(request.url);
-            const targetUrl = '$vmessDirect';
+            const targetUrl = '$vmessTunnel';
             const newUrl = targetUrl + url.pathname + url.search;
             return fetch(new Request(newUrl, {
               method: request.method,
@@ -284,14 +232,22 @@ jobs:
           Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$vmessAccountId/workers/scripts/my-vpn-worker" -Method Put -Headers $headers -Body $workerCode1
           Write-Host "✅ VMess Worker updated."
 
-          # Worker 2: Trojan Direct
+          # Worker 2: Trojan + VLESS + VMess (Routed)
           $workerCode2 = @"
           addEventListener('fetch', event => {
             event.respondWith(handleRequest(event.request));
           });
           async function handleRequest(request) {
             const url = new URL(request.url);
-            const targetUrl = '$trojanDirect';
+            const path = url.pathname;
+            const TUNNEL_VLESS = '$vlessTunnel';
+            const TUNNEL_VMESS = '$vmessTunnel';
+            const TUNNEL_TROJAN = '$trojanTunnel';
+            let targetUrl;
+            if (path.startsWith('/vless')) targetUrl = TUNNEL_VLESS;
+            else if (path.startsWith('/vmess')) targetUrl = TUNNEL_VMESS;
+            else if (path.startsWith('/trojan')) targetUrl = TUNNEL_TROJAN;
+            else return new Response('Not Found', { status: 404 });
             const newUrl = targetUrl + url.pathname + url.search;
             return fetch(new Request(newUrl, {
               method: request.method,
@@ -302,7 +258,7 @@ jobs:
           "@
           $headers = @{ Authorization = "Bearer $trojanToken"; "Content-Type" = "application/javascript" }
           Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$trojanAccountId/workers/scripts/little-frost-5a54" -Method Put -Headers $headers -Body $workerCode2
-          Write-Host "✅ Trojan Worker updated."
+          Write-Host "✅ Trojan Worker (Routed) updated."
 
       # ==========================================================
       # 9. GENERATE & SEND 5 LINKS
@@ -320,51 +276,45 @@ jobs:
 
           $domain1 = "my-vpn-worker.hosseinderees7.workers.dev"
           $domain2 = "little-frost-5a54.nest-dev-full-stack.workers.dev"
-          $domain3 = "my-vpn-worker.hosseinderees7.workers.dev"  # Same as domain1 for routed configs
 
-          # 1. VMess Direct (Worker 1)
+          # 1. VMess Direct
           $vmessObj = [ordered]@{ v = "2"; ps = "VMess_Direct"; add = $domain1; port = 443; id = $uuid; aid = 0; scy = "zero"; net = "ws"; type = "none"; host = ""; path = "/"; tls = "tls"; sni = ""; alpn = ""; fp = "" }
           $vmessDirectLink = "vmess://" + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($vmessObj | ConvertTo-Json -Compress)))
           $body = @{ server_id = $serverId; vmess = $vmessDirectLink } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
-          Write-Host "✅ VMess Direct link sent."
+          Write-Host "✅ VMess Direct sent."
 
-          # 2. Trojan Direct (Worker 2)
+          # 2. Trojan Direct
           $trojanDirectLink = "trojan://${trojanPassword}@${domain2}:443?path=/&security=tls&type=ws#Trojan_Direct"
           $body = @{ server_id = $serverId; trojan = $trojanDirectLink } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
-          Write-Host "✅ Trojan Direct link sent."
+          Write-Host "✅ Trojan Direct sent."
 
           # 3. VLESS Routed
-          $vlessRoutedLink = "vless://${uuid}@${domain3}:443?path=/vless&security=tls&encryption=none&type=ws#VLESS_Routed"
+          $vlessRoutedLink = "vless://${uuid}@${domain2}:443?path=/vless&security=tls&encryption=none&type=ws#VLESS_Routed"
           $body = @{ server_id = $serverId; vmess = $vlessRoutedLink } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
-          Write-Host "✅ VLESS Routed link sent."
+          Write-Host "✅ VLESS Routed sent."
 
           # 4. VMess Routed
-          $vmessObj.add = $domain3
+          $vmessObj.add = $domain2
           $vmessObj.path = "/vmess"
           $vmessObj.ps = "VMess_Routed"
           $vmessRoutedLink = "vmess://" + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($vmessObj | ConvertTo-Json -Compress)))
           $body = @{ server_id = $serverId; vmess = $vmessRoutedLink } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
-          Write-Host "✅ VMess Routed link sent."
+          Write-Host "✅ VMess Routed sent."
 
           # 5. Trojan Routed
-          $trojanRoutedLink = "trojan://${trojanPassword}@${domain3}:443?path=/trojan&security=tls&type=ws#Trojan_Routed"
+          $trojanRoutedLink = "trojan://${trojanPassword}@${domain2}:443?path=/trojan&security=tls&type=ws#Trojan_Routed"
           $body = @{ server_id = $serverId; trojan = $trojanRoutedLink } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://miradig.ir/update" -Method Post -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType "application/json"
-          Write-Host "✅ Trojan Routed link sent."
+          Write-Host "✅ Trojan Routed sent."
 
           Write-Host ""
           Write-Host "==========================================" -ForegroundColor Green
           Write-Host "  ALL 5 LINKS GENERATED!" -ForegroundColor Cyan
           Write-Host "==========================================" -ForegroundColor Green
-          Write-Host "1. VMess Direct: $vmessDirectLink" -ForegroundColor White
-          Write-Host "2. Trojan Direct: $trojanDirectLink" -ForegroundColor White
-          Write-Host "3. VLESS Routed: $vlessRoutedLink" -ForegroundColor White
-          Write-Host "4. VMess Routed: $vmessRoutedLink" -ForegroundColor White
-          Write-Host "5. Trojan Routed: $trojanRoutedLink" -ForegroundColor White
 
       # ==========================================================
       # 10. KEEP ALIVE
