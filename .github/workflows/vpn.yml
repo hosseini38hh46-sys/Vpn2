@@ -1,4 +1,4 @@
-name: VPN - Tunnel + Worker Custom Domain
+name: VPN - Trojan + VLESS Multi-URL + 2 Workers
 
 on:
   workflow_dispatch:
@@ -18,133 +18,222 @@ jobs:
           rm xray.zip
           wget -qO cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
           chmod +x xray cloudflared
-          echo "Installed"
+          echo "✅ Installed"
 
       - name: Create Xray Config
         run: |
           cd xray
-          UUID="5aa2ebe1-5114-4bc3-aefa-935807433e70"
           PASSWORD="5aa2ebe1-5114-4bc3-aefa-935807433e70"
+          UUID="5aa2ebe1-5114-4bc3-aefa-935807433e70"
 
           cat > config.json <<EOF
           {
-            "log": {"loglevel": "warning"},
+            "log": { "loglevel": "warning" },
             "inbounds": [
-              {"listen": "0.0.0.0", "port": 8080, "protocol": "trojan", "settings": {"clients": [{"password": "${PASSWORD}"}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan"}}},
-              {"listen": "0.0.0.0", "port": 8081, "protocol": "vless", "settings": {"clients": [{"id": "${UUID}"}], "decryption": "none"}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless"}}}
+              {"listen": "::", "port": 8080, "protocol": "trojan", "settings": {"clients": [{"password": "${PASSWORD}"}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan"}}},
+              {"listen": "::", "port": 8081, "protocol": "trojan", "settings": {"clients": [{"password": "${PASSWORD}"}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan"}}},
+              {"listen": "::", "port": 8082, "protocol": "trojan", "settings": {"clients": [{"password": "${PASSWORD}"}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan"}}},
+              {"listen": "::", "port": 8083, "protocol": "vless", "settings": {"clients": [{"id": "${UUID}"}], "decryption": "none"}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless"}}},
+              {"listen": "::", "port": 8084, "protocol": "vless", "settings": {"clients": [{"id": "${UUID}"}], "decryption": "none"}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless"}}},
+              {"listen": "::", "port": 8085, "protocol": "vless", "settings": {"clients": [{"id": "${UUID}"}], "decryption": "none"}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless"}}},
+              {"listen": "::", "port": 8086, "protocol": "vmess", "settings": {"clients": [{"id": "${UUID}", "alterId": 0}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/"}}},
+              {"listen": "::", "port": 8087, "protocol": "trojan", "settings": {"clients": [{"password": "${PASSWORD}"}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/"}}}
             ],
             "outbounds": [{"protocol": "freedom"}]
           }
           EOF
+          echo "✅ Config created"
 
       - name: Start Xray
         run: |
           cd xray
           ./xray run -config config.json > xray.log 2>&1 &
           sleep 5
+          if pgrep -f "xray run" > /dev/null; then echo "✅ Xray started"; else echo "❌ Failed"; exit 1; fi
 
-      - name: Start Cloudflared 1 (Trojan)
+      - name: Start Trojan Cloudflared 1
         run: |
           cd xray
-          ./cloudflared tunnel --url http://127.0.0.1:8080 > cf1.txt 2> cf1_err.txt &
-          sleep 15
+          ./cloudflared tunnel --url http://[::1]:8080 > trojan1_cf.txt 2> trojan1_cf_err.txt &
+          sleep 5
 
-      - name: Start Cloudflared 2 (VLESS)
+      - name: Start Trojan Cloudflared 2
         run: |
           cd xray
-          ./cloudflared tunnel --url http://127.0.0.1:8081 > cf2.txt 2> cf2_err.txt &
+          ./cloudflared tunnel --url http://127.0.0.1:8081 > trojan2_cf.txt 2> trojan2_cf_err.txt &
+          sleep 5
+
+      - name: Start Trojan Cloudflared 3
+        run: |
+          cd xray
+          ./cloudflared tunnel --url http://127.0.0.1:8082 > trojan3_cf.txt 2> trojan3_cf_err.txt &
+          sleep 5
+
+      - name: Start VLESS Cloudflared 1
+        run: |
+          cd xray
+          ./cloudflared tunnel --url http://127.0.0.1:8083 > vless1_cf.txt 2> vless1_cf_err.txt &
+          sleep 5
+
+      - name: Start VLESS Cloudflared 2
+        run: |
+          cd xray
+          ./cloudflared tunnel --url http://127.0.0.1:8084 > vless2_cf.txt 2> vless2_cf_err.txt &
+          sleep 5
+
+      - name: Start VLESS Cloudflared 3
+        run: |
+          cd xray
+          ./cloudflared tunnel --url http://127.0.0.1:8085 > vless3_cf.txt 2> vless3_cf_err.txt &
+          sleep 5
+
+      - name: Start Worker 1 Cloudflared (VMess)
+        run: |
+          cd xray
+          ./cloudflared tunnel --url http://127.0.0.1:8086 > worker1_cf.txt 2> worker1_cf_err.txt &
+          sleep 5
+
+      - name: Start Worker 2 Cloudflared (Trojan)
+        run: |
+          cd xray
+          ./cloudflared tunnel --url http://127.0.0.1:8087 > worker2_cf.txt 2> worker2_cf_err.txt &
           sleep 15
 
       - name: Get URLs
         run: |
           cd xray
-          TROJAN_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' cf1_err.txt | head -n 1)
-          VLESS_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' cf2_err.txt | head -n 1)
-          
-          echo "TROJAN_URL=$TROJAN_URL" >> $GITHUB_ENV
-          echo "VLESS_URL=$VLESS_URL" >> $GITHUB_ENV
+          sleep 5
 
-      - name: Update Worker
+          TROJAN1_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' trojan1_cf_err.txt | head -n 1)
+          TROJAN2_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' trojan2_cf_err.txt | head -n 1)
+          TROJAN3_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' trojan3_cf_err.txt | head -n 1)
+          VLESS1_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' vless1_cf_err.txt | head -n 1)
+          VLESS2_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' vless2_cf_err.txt | head -n 1)
+          VLESS3_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' vless3_cf_err.txt | head -n 1)
+          WORKER1_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' worker1_cf_err.txt | head -n 1)
+          WORKER2_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' worker2_cf_err.txt | head -n 1)
+
+          echo "TROJAN1_URL=$TROJAN1_URL" >> "$GITHUB_ENV"
+          echo "TROJAN2_URL=$TROJAN2_URL" >> "$GITHUB_ENV"
+          echo "TROJAN3_URL=$TROJAN3_URL" >> "$GITHUB_ENV"
+          echo "VLESS1_URL=$VLESS1_URL" >> "$GITHUB_ENV"
+          echo "VLESS2_URL=$VLESS2_URL" >> "$GITHUB_ENV"
+          echo "VLESS3_URL=$VLESS3_URL" >> "$GITHUB_ENV"
+          echo "WORKER1_URL=$WORKER1_URL" >> "$GITHUB_ENV"
+          echo "WORKER2_URL=$WORKER2_URL" >> "$GITHUB_ENV"
+
+          echo "Trojan: $TROJAN1_URL, $TROJAN2_URL, $TROJAN3_URL"
+          echo "VLESS: $VLESS1_URL, $VLESS2_URL, $VLESS3_URL"
+          echo "Worker1: $WORKER1_URL"
+          echo "Worker2: $WORKER2_URL"
+
+      - name: Update Workers
         env:
-          CF_TOKEN_TROJAN: ${{ secrets.CF_TOKEN_TROJAN}}
+          CF_TOKEN: ${{ secrets.CF_TOKEN_VMESS }}
         run: |
           cd xray
-          
-          WORKER_CODE=$(cat <<EOF
-          addEventListener('fetch', event => {
-            event.respondWith(handleRequest(event.request));
-          });
+          ACC1="e96a2dd0c1de68077e282bab0f5e64af"
 
+          CODE1=$(cat <<EOF
+          addEventListener('fetch', event => { event.respondWith(handleRequest(event.request)); });
           async function handleRequest(request) {
             const url = new URL(request.url);
-            
-            const trojanUrl = "${TROJAN_URL}";
-            const vlessUrl = "${VLESS_URL}";
-            
-            let target = trojanUrl;
-            
-            if (url.pathname.startsWith('/vless')) {
-              target = vlessUrl;
-              url.pathname = url.pathname.replace('/vless', '/');
-            }
-            
-            const newUrl = target + url.pathname + url.search;
-            
-            return fetch(new Request(newUrl, {
-              method: request.method,
-              headers: request.headers,
-              body: request.body
-            }));
+            const target = new URL('${WORKER1_URL}');
+            url.hostname = target.hostname;
+            url.protocol = target.protocol;
+            return fetch(new Request(url, request));
           }
           EOF
           )
-          
-          ACC_ID="e96a2dd0c1de68077e282bab0f5e64af"
-          
-          curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${ACC_ID}/workers/scripts/my-vpn-worker" \
-            -H "Authorization: Bearer $CF_TOKEN_TROJAN" \
-            -H "Content-Type: application/javascript" \
-            --data-raw "$WORKER_CODE"
-          
-          echo "Worker updated"
 
-      - name: Generate Links
+          CODE2=$(cat <<EOF
+          addEventListener('fetch', event => { event.respondWith(handleRequest(event.request)); });
+          async function handleRequest(request) {
+            const url = new URL(request.url);
+            const target = new URL('${WORKER2_URL}');
+            url.hostname = target.hostname;
+            url.protocol = target.protocol;
+            return fetch(new Request(url, request));
+          }
+          EOF
+          )
+
+          curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${ACC1}/workers/scripts/my-vpn-worker" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/javascript" --data-raw "$CODE1"
+
+          curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${ACC1}/workers/scripts/my-vpn-worker-2" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/javascript" --data-raw "$CODE2"
+
+          echo "✅ Workers updated"
+
+      - name: Generate 8 Links
         run: |
-          UUID="5aa2ebe1-5114-4bc3-aefa-935807433e70"
           PASSWORD="5aa2ebe1-5114-4bc3-aefa-935807433e70"
-          SERVER_ID="server1"
+          UUID="5aa2ebe1-5114-4bc3-aefa-935807433e70"
+          SERVER_ID="server5"
           SECRET="fasjfajf09wjf9jawfj0j"
-          WORKER_DOMAIN="asdoijaosd.taban-learn.ir"
-          
-          TROJAN_DOMAIN=$(echo "$TROJAN_URL" | sed 's|https://||')
-          VLESS_DOMAIN=$(echo "$VLESS_URL" | sed 's|https://||')
-          
-          # 4 Links
-          TROJAN_TUNNEL="trojan://${PASSWORD}@${TROJAN_DOMAIN}:443?path=%2Ftrojan&security=tls&type=ws#Trojan_Tunnel"
-          VLESS_TUNNEL="vless://${UUID}@${VLESS_DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&type=ws#VLESS_Tunnel"
-          TROJAN_WORKER="trojan://${PASSWORD}@${WORKER_DOMAIN}:443?path=/&security=tls&type=ws#Trojan_Worker"
-          VLESS_WORKER="vless://${UUID}@${WORKER_DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&type=ws#VLESS_Worker"
-          
-          for LINK in "$TROJAN_TUNNEL" "$VLESS_TUNNEL" "$TROJAN_WORKER" "$VLESS_WORKER"; do
-            curl -s -X POST "https://miradig.ir/update" \
-              -H "Authorization: Bearer $SECRET" \
-              -H "Content-Type: application/json" \
-              -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
-          done
-          
-          echo "All sent!"
+
+          TROJAN1_DOMAIN=$(echo "$TROJAN1_URL" | sed 's|https://||')
+          TROJAN2_DOMAIN=$(echo "$TROJAN2_URL" | sed 's|https://||')
+          TROJAN3_DOMAIN=$(echo "$TROJAN3_URL" | sed 's|https://||')
+          VLESS1_DOMAIN=$(echo "$VLESS1_URL" | sed 's|https://||')
+          VLESS2_DOMAIN=$(echo "$VLESS2_URL" | sed 's|https://||')
+          VLESS3_DOMAIN=$(echo "$VLESS3_URL" | sed 's|https://||')
+          WORKER1_DOMAIN="my-vpn-worker.hosseinderees7.workers.dev"
+          WORKER2_DOMAIN="my-vpn-worker-2.hosseinderees7.workers.dev"
+
+          # Trojan 1 - Port 443
+          LINK="trojan://${PASSWORD}@${TROJAN1_DOMAIN}:443?path=%2Ftrojan&security=tls&type=ws#Trojan_443"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          # Trojan 2 - Port 2053
+          LINK="trojan://${PASSWORD}@${TROJAN2_DOMAIN}:2053?path=%2Ftrojan&security=tls&type=ws#Trojan_2053"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          # Trojan 3 - Port 2083
+          LINK="trojan://${PASSWORD}@${TROJAN3_DOMAIN}:2083?path=%2Ftrojan&security=tls&type=ws#Trojan_2083"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          # VLESS 1 - Port 443
+          LINK="vless://${UUID}@${VLESS1_DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&type=ws#VLESS_443"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          # VLESS 2 - Port 2096
+          LINK="vless://${UUID}@${VLESS2_DOMAIN}:2096?path=%2Fvless&security=tls&encryption=none&type=ws#VLESS_2096"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          # VLESS 3 - Port 8443
+          LINK="vless://${UUID}@${VLESS3_DOMAIN}:8443?path=%2Fvless&security=tls&encryption=none&type=ws#VLESS_8443"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          # Worker 1 (VMess)
+          VMESS_JSON='{"v":"2","ps":"همراه_اول","add":"'${WORKER1_DOMAIN}'","port":443,"id":"'${UUID}'","aid":0,"scy":"none","net":"ws","type":"none","path":"/","tls":"tls"}'
+          VMESS_LINK="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$VMESS_LINK\"}"
+
+          # Worker 2 (Trojan)
+          LINK="trojan://${PASSWORD}@${WORKER2_DOMAIN}:443?path=/&security=tls&type=ws#همراه_اول"
+          curl -s -X POST "https://miradig.ir/update" -H "Authorization: Bearer $SECRET" -H "Content-Type: application/json" -d "{\"server_id\":\"$SERVER_ID\",\"vmess\":\"$LINK\"}"
+
+          echo ""
+          echo "=========================================="
+          echo "✅ ALL 8 LINKS SENT!"
+          echo "=========================================="
 
       - name: Keep Alive
         run: |
           cd xray
+          PORTS=(8080 8081 8082 8083 8084 8085 8086 8087)
           for i in {1..360}; do
             sleep 60
             if ! pgrep -f "xray run" > /dev/null; then
               ./xray run -config config.json > xray.log 2>&1 &
+              sleep 3
             fi
-            if ! pgrep -f "cloudflared tunnel" > /dev/null; then
-              ./cloudflared tunnel --url http://127.0.0.1:8080 > cf1.txt 2> cf1_err.txt &
-              ./cloudflared tunnel --url http://127.0.0.1:8081 > cf2.txt 2> cf2_err.txt &
-            fi
+            for PORT in "${PORTS[@]}"; do
+              if ! pgrep -f "cloudflared tunnel.*${PORT}" > /dev/null; then
+                ./cloudflared tunnel --url http://127.0.0.1:${PORT} > cf_${PORT}.txt 2> cf_${PORT}_err.txt &
+              fi
+            done
             echo "[$i/360] Alive"
           done
